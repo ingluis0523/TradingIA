@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
+import { createClient } from '@supabase/supabase-js'
 import { Navbar } from '@/components/dashboard/Navbar'
 import { StatsCards } from '@/components/dashboard/StatsCards'
 import { PriceCards } from '@/components/dashboard/PriceCards'
@@ -10,6 +11,12 @@ import { TradingChart } from '@/components/dashboard/TradingChart'
 import { PerformanceChart } from '@/components/dashboard/PerformanceChart'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import type { BotConfig, PerformanceMetrics, AccountInfo, Trade, Signal, BotLog, Ticker } from '@/types/trading'
+
+// Browser-only Supabase client (anon key, used only for Realtime subscription)
+const supabaseBrowser = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
 
 interface DashboardData {
   config: BotConfig | null
@@ -91,22 +98,20 @@ export default function Dashboard() {
     } catch {}
   }, [])
 
+  // Main data intervals
   useEffect(() => {
     setMounted(true)
     fetchStatus()
     fetchPrices()
     fetchTrades()
     fetchSignals()
-    fetchLogs()
+    fetchLogs() // Initial load of existing logs
 
-    // Prices: every 5s
     const priceInterval = setInterval(fetchPrices, 5000)
-    // Status: every 15s
     const statusInterval = setInterval(fetchStatus, 15000)
-    // Trades + signals: every 20s
     const tradesInterval = setInterval(() => { fetchTrades(); fetchSignals() }, 20000)
-    // Logs: every 10s (dedicated, with cache-buster)
-    const logsInterval = setInterval(fetchLogs, 10000)
+    // Fallback poll for logs every 60s (Realtime handles real-time updates)
+    const logsInterval = setInterval(fetchLogs, 60000)
 
     return () => {
       clearInterval(priceInterval)
@@ -115,6 +120,25 @@ export default function Dashboard() {
       clearInterval(logsInterval)
     }
   }, [fetchStatus, fetchPrices, fetchTrades, fetchSignals, fetchLogs])
+
+  // Supabase Realtime: receive new log rows the instant they're inserted
+  useEffect(() => {
+    const channel = supabaseBrowser
+      .channel('bot-logs-realtime')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'bot_logs' },
+        (payload) => {
+          const newLog = payload.new as BotLog
+          setLogs((prev) => [newLog, ...prev].slice(0, 30))
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabaseBrowser.removeChannel(channel)
+    }
+  }, [])
 
   const config = data.config || INITIAL_CONFIG
 
