@@ -90,7 +90,7 @@ export function BotControls({ config, onStatusChange, onOptimisticChange }: BotC
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-2 flex-wrap">
+      <div className="flex items-center gap-2 flex-wrap gap-y-2">
         {/* Status badge */}
         <div className={cn(
           'flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium',
@@ -146,11 +146,11 @@ export function BotControls({ config, onStatusChange, onOptimisticChange }: BotC
         </Button>
 
         {config && (
-          <div className="flex items-center gap-3 ml-auto text-xs text-muted-foreground">
-            <span>Leverage: <strong className="text-foreground">{config.leverage}x</strong></span>
-            <span>Riesgo/trade: <strong className="text-foreground">{(config.riskPerTrade * 100).toFixed(0)}%</strong></span>
-            <span>Max pos: <strong className="text-foreground">{config.maxPositions}</strong></span>
-            <span>Capital: <strong className="text-foreground">${config.currentCapital?.toFixed(2)}</strong></span>
+          <div className="flex items-center gap-2 md:gap-3 ml-auto text-xs text-muted-foreground flex-wrap justify-end">
+            <span>Lev: <strong className="text-foreground">{config.leverage}x</strong></span>
+            <span className="hidden sm:inline">Riesgo: <strong className="text-foreground">{(config.riskPerTrade * 100).toFixed(0)}%</strong></span>
+            <span className="hidden sm:inline">Pos: <strong className="text-foreground">{config.maxPositions}</strong></span>
+            <span>Capital: <strong className="text-foreground">${config.currentCapital?.toFixed(0)}</strong></span>
           </div>
         )}
       </div>

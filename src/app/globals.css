@@ -3,7 +3,30 @@
 @tailwind utilities;
 
 @layer base {
+  /* ── Light Theme (default) ── */
   :root {
+    --background: 210 20% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --primary: 142 71% 38%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 40% 94%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 40% 94%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 210 40% 94%;
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 32% 89%;
+    --input: 214 32% 89%;
+    --ring: 142 71% 38%;
+    --radius: 0.5rem;
+  }
+
+  /* ── Dark Theme ── */
+  .dark {
     --background: 222 47% 5%;
     --foreground: 213 31% 91%;
     --card: 222 47% 8%;
@@ -21,14 +44,13 @@
     --border: 216 34% 17%;
     --input: 216 34% 17%;
     --ring: 142 71% 45%;
-    --radius: 0.5rem;
   }
 }
 
 @layer base {
   * { @apply border-border; }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground transition-colors duration-200;
     font-feature-settings: "rlig" 1, "calt" 1;
   }
   ::-webkit-scrollbar { width: 4px; height: 4px; }
@@ -37,24 +59,17 @@
 }
 
 @layer utilities {
-  .text-profit { @apply text-green-400; }
-  .text-loss { @apply text-red-400; }
-  .bg-profit { @apply bg-green-500/10; }
-  .bg-loss { @apply bg-red-500/10; }
-  .border-profit { @apply border-green-500/30; }
-  .border-loss { @apply border-red-500/30; }
-  .glow-green { box-shadow: 0 0 20px rgba(34, 197, 94, 0.15); }
-  .glow-red { box-shadow: 0 0 20px rgba(239, 68, 68, 0.15); }
-  .card-glass {
-    @apply bg-card/80 backdrop-blur-sm border border-border/60 rounded-xl;
-  }
+  .text-profit { @apply text-green-600 dark:text-green-400; }
+  .text-loss   { @apply text-red-600 dark:text-red-400; }
+  .bg-profit   { @apply bg-green-500/10; }
+  .bg-loss     { @apply bg-red-500/10; }
+  .card-glass  { @apply bg-card/80 backdrop-blur-sm border border-border/60 rounded-xl; }
   .number-mono { font-variant-numeric: tabular-nums; font-family: 'SF Mono', 'Fira Code', monospace; }
+  .hide-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+  .hide-scrollbar::-webkit-scrollbar { display: none; }
 }
 
-/* Trading chart container */
-.chart-container { height: 320px; }
-
-/* Animated dot for running status */
+/* Animated status dot */
 .status-dot {
   width: 8px; height: 8px;
   @apply rounded-full bg-green-400;
@@ -62,8 +77,19 @@
 }
 @keyframes pulse-glow {
   0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.6); }
-  50% { opacity: 0.8; box-shadow: 0 0 0 6px rgba(34, 197, 94, 0); }
+  50%       { opacity: 0.8; box-shadow: 0 0 0 6px rgba(34, 197, 94, 0); }
 }
+.status-dot.stopped { @apply bg-gray-400; animation: none; }
+.status-dot.error   { @apply bg-red-400; }
 
-.status-dot.stopped { @apply bg-gray-500; animation: none; }
-.status-dot.error { @apply bg-red-400; }
+/* Animations */
+@keyframes slide-in {
+  from { transform: translateX(-10px); opacity: 0; }
+  to   { transform: translateX(0); opacity: 1; }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.animate-slide-in { animation: slide-in 0.3s ease-out; }
+.animate-fade-in  { animation: fade-in 0.4s ease-out; }

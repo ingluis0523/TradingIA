@@ -97,12 +97,12 @@ export default function TradesPage() {
                 <p className="text-sm">Sin operaciones {filter !== 'all' ? `(${filter})` : ''}</p>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+              <div className="overflow-x-auto -mx-0">
+                <table className="w-full text-sm min-w-[700px]">
                   <thead>
                     <tr className="border-b border-border/60">
-                      {['Par', 'Dirección', 'Entrada', 'Salida', 'Qty', 'Lev', 'SL', 'TP1', 'P&L', 'P&L%', 'Estado', 'Apertura', 'Duración'].map((h) => (
-                        <th key={h} className="text-left px-4 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">{h}</th>
+                      {['Par', 'Dir.', 'Entrada', 'Salida', 'P&L', 'P&L%', 'Estado', 'Hace', 'Lev'].map((h) => (
+                        <th key={h} className="text-left px-3 py-3 text-xs font-medium text-muted-foreground whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -112,40 +112,34 @@ export default function TradesPage() {
                       const info = SYMBOL_INFO[trade.symbol]
                       return (
                         <tr key={trade.id} className="border-b border-border/30 hover:bg-secondary/20 transition-colors">
-                          <td className="px-4 py-3 font-medium">
+                          <td className="px-3 py-3 font-medium whitespace-nowrap">
                             <span className="mr-1">{info.icon}</span>
-                            {trade.symbol.replace('USDT', '')}/USDT
+                            {trade.symbol.replace('USDT', '')}
                           </td>
-                          <td className="px-4 py-3">
-                            <Badge variant={trade.side === 'BUY' ? 'long' : 'short'} className="gap-1">
+                          <td className="px-3 py-3">
+                            <Badge variant={trade.side === 'BUY' ? 'long' : 'short'} className="gap-1 text-xs">
                               {trade.side === 'BUY' ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                              {trade.side === 'BUY' ? 'LONG' : 'SHORT'}
+                              {trade.side === 'BUY' ? 'L' : 'S'}
                             </Badge>
                           </td>
-                          <td className="px-4 py-3 number-mono text-foreground/90">${trade.entryPrice.toLocaleString()}</td>
-                          <td className="px-4 py-3 number-mono text-foreground/90">
+                          <td className="px-3 py-3 number-mono text-foreground/90 whitespace-nowrap">${trade.entryPrice.toLocaleString()}</td>
+                          <td className="px-3 py-3 number-mono text-foreground/90 whitespace-nowrap">
                             {trade.exitPrice ? `$${trade.exitPrice.toLocaleString()}` : <span className="text-muted-foreground">—</span>}
                           </td>
-                          <td className="px-4 py-3 number-mono text-foreground/90">{trade.quantity}</td>
-                          <td className="px-4 py-3 number-mono">{trade.leverage}x</td>
-                          <td className="px-4 py-3 number-mono text-red-400/80">${trade.stopLoss.toLocaleString()}</td>
-                          <td className="px-4 py-3 number-mono text-green-400/80">${trade.takeProfit1.toLocaleString()}</td>
-                          <td className={cn('px-4 py-3 number-mono font-semibold', trade.pnl !== undefined ? (positive ? 'text-green-400' : 'text-red-400') : 'text-muted-foreground')}>
+                          <td className={cn('px-3 py-3 number-mono font-semibold whitespace-nowrap', trade.pnl !== undefined ? (positive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400') : 'text-muted-foreground')}>
                             {trade.pnl !== undefined ? (positive ? '+' : '') + formatCurrency(trade.pnl) : '—'}
                           </td>
-                          <td className={cn('px-4 py-3 number-mono font-semibold', trade.pnlPct !== undefined ? (positive ? 'text-green-400' : 'text-red-400') : 'text-muted-foreground')}>
+                          <td className={cn('px-3 py-3 number-mono font-semibold whitespace-nowrap', trade.pnlPct !== undefined ? (positive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400') : 'text-muted-foreground')}>
                             {trade.pnlPct !== undefined ? formatPercent(trade.pnlPct) : '—'}
                           </td>
-                          <td className="px-4 py-3">
+                          <td className="px-3 py-3">
                             <Badge variant={trade.status === 'OPEN' ? 'info' : trade.status === 'CLOSED' ? ((trade.pnl || 0) >= 0 ? 'success' : 'destructive') : 'secondary'}>
-                              {trade.status === 'OPEN' ? <Clock className="w-2.5 h-2.5 mr-1" /> : trade.status === 'CLOSED' && (trade.pnl || 0) >= 0 ? <CheckCircle2 className="w-2.5 h-2.5 mr-1" /> : <XCircle className="w-2.5 h-2.5 mr-1" />}
+                              {trade.status === 'OPEN' ? <Clock className="w-2.5 h-2.5 mr-1" /> : (trade.pnl || 0) >= 0 ? <CheckCircle2 className="w-2.5 h-2.5 mr-1" /> : <XCircle className="w-2.5 h-2.5 mr-1" />}
                               {trade.status}
                             </Badge>
                           </td>
-                          <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">{timeAgo(trade.openedAt)}</td>
-                          <td className="px-4 py-3 text-xs text-muted-foreground">
-                            {trade.duration ? `${Math.round(trade.duration / 60000)}m` : '—'}
-                          </td>
+                          <td className="px-3 py-3 text-xs text-muted-foreground whitespace-nowrap">{timeAgo(trade.openedAt)}</td>
+                          <td className="px-3 py-3 text-xs number-mono">{trade.leverage}x</td>
                         </tr>
                       )
                     })}

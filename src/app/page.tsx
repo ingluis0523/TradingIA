@@ -110,7 +110,7 @@ export default function Dashboard() {
     <div className="min-h-screen bg-background">
       <Navbar botRunning={botRunning} />
 
-      <main className="max-w-[1600px] mx-auto px-4 py-5 space-y-4">
+      <main className="max-w-[1600px] mx-auto px-3 sm:px-4 py-4 space-y-3 sm:space-y-4">
         {/* Price Ticker Bar */}
         <PriceCards tickers={tickers} />
 
@@ -210,8 +210,8 @@ export default function Dashboard() {
 
         {/* Quick Stats Row */}
         {data.metrics && (
-          <div className="card-glass p-4">
-            <div className="grid grid-cols-2 md:grid-cols-6 gap-4 text-center">
+          <div className="card-glass p-3 sm:p-4">
+            <div className="grid grid-cols-3 md:grid-cols-6 gap-3 sm:gap-4 text-center">
               {[
                 { label: 'Mejor trade', value: `+$${data.metrics.bestTrade.toFixed(2)}`, color: 'text-green-400' },
                 { label: 'Peor trade', value: `$${data.metrics.worstTrade.toFixed(2)}`, color: 'text-red-400' },

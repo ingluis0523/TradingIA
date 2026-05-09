@@ -74,21 +74,21 @@ export function StatsCards({ metrics, account, initialCapital }: StatsCardsProps
   ]
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+    <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3">
       {stats.map((stat) => (
         <Card key={stat.title} className={cn(
           'border transition-colors',
           stat.positive ? 'border-green-500/10 hover:border-green-500/20' : 'border-red-500/10 hover:border-red-500/20'
         )}>
-          <CardHeader className="pb-2 pt-4 px-4">
+          <CardHeader className="pb-1 pt-3 px-3 sm:px-4 sm:pt-4">
             <CardTitle className="flex items-center gap-1.5 text-xs">
-              <stat.icon className="w-3 h-3" />
-              {stat.title}
+              <stat.icon className="w-3 h-3 shrink-0" />
+              <span className="truncate">{stat.title}</span>
             </CardTitle>
           </CardHeader>
-          <CardContent className="px-4 pb-4">
+          <CardContent className="px-3 pb-3 sm:px-4 sm:pb-4">
             <div className={cn(
-              'text-xl font-bold number-mono',
+              'text-base sm:text-xl font-bold number-mono',
               stat.positive ? 'text-green-400' : 'text-red-400'
             )}>
               {stat.value}
