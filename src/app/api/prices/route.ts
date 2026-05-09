@@ -1,5 +1,3 @@
-export const dynamic = 'force-dynamic'
-
 import { NextResponse } from 'next/server'
 import { get24hTickers } from '@/lib/binance'
 import { TRADING_SYMBOLS } from '@/types/trading'
