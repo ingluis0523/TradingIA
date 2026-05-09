@@ -1,0 +1,10 @@
+{
+  "functions": {
+    "src/app/api/cron/trade/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/bot/start/route.ts": {
+      "maxDuration": 30
+    }
+  }
+}
