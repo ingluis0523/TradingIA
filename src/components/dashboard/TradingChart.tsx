@@ -39,7 +39,6 @@ export function TradingChart({ className }: TradingChartProps) {
       },
       timeScale: {
         borderColor: 'rgba(148,163,184,0.1)',
-        textColor: '#94a3b8',
         timeVisible: true,
       },
       width: chartRef.current.clientWidth,

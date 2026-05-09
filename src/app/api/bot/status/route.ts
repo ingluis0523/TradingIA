@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getBotConfig, getOpenTrades, getRecentLogs, getPerformanceMetrics } from '@/lib/supabase'
+import type { Trade, BotLog } from '@/types/trading'
 import { getAccountInfo } from '@/lib/binance'
 
 export async function GET() {
@@ -12,14 +13,14 @@ export async function GET() {
     errors.push(`Supabase config: ${e instanceof Error ? e.message : String(e)}`)
   }
 
-  let openTrades = []
+  let openTrades: Trade[] = []
   try {
     openTrades = await getOpenTrades()
   } catch (e) {
     errors.push(`Trades: ${e instanceof Error ? e.message : String(e)}`)
   }
 
-  let logs = []
+  let logs: BotLog[] = []
   try {
     logs = await getRecentLogs(20)
   } catch (e) {

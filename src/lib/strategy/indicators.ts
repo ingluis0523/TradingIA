@@ -1,4 +1,4 @@
-import type { Candle, Indicators, IndicatorConfig, DEFAULT_INDICATOR_CONFIG as _ } from '@/types/trading'
+import type { Candle, Indicators, IndicatorConfig } from '@/types/trading'
 
 // ─── Moving Averages ──────────────────────────────────────────────────────────
 
@@ -205,7 +205,7 @@ export function volumeMA(candles: Candle[], period = 20): number[] {
 
 // ─── Main Calculate Indicators ────────────────────────────────────────────────
 
-export function calculateIndicators(candles: Candle[], config?: Partial<typeof import('@/types/trading').DEFAULT_INDICATOR_CONFIG>): Indicators {
+export function calculateIndicators(candles: Candle[], config?: Partial<IndicatorConfig>): Indicators {
   const cfg = {
     ema20Period: 20, ema50Period: 50, ema200Period: 200,
     rsiPeriod: 14, macdFast: 12, macdSlow: 26, macdSignal: 9,
