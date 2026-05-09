@@ -44,6 +44,7 @@ export default function Dashboard() {
   const [tickers, setTickers] = useState<Ticker[]>([])
   const [recentTrades, setRecentTrades] = useState<Trade[]>([])
   const [signals, setSignals] = useState<Signal[]>([])
+  const [logs, setLogs] = useState<BotLog[]>([])
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
   const [mounted, setMounted] = useState(false)
   const [apiErrors, setApiErrors] = useState<string[]>([])
@@ -83,26 +84,37 @@ export default function Dashboard() {
     } catch {}
   }, [])
 
+  const fetchLogs = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/logs?limit=30&t=${Date.now()}`)
+      if (res.ok) setLogs(await res.json())
+    } catch {}
+  }, [])
+
   useEffect(() => {
     setMounted(true)
     fetchStatus()
     fetchPrices()
     fetchTrades()
     fetchSignals()
+    fetchLogs()
 
     // Prices: every 5s
     const priceInterval = setInterval(fetchPrices, 5000)
     // Status: every 15s
     const statusInterval = setInterval(fetchStatus, 15000)
-    // Trades: every 20s
+    // Trades + signals: every 20s
     const tradesInterval = setInterval(() => { fetchTrades(); fetchSignals() }, 20000)
+    // Logs: every 10s (dedicated, with cache-buster)
+    const logsInterval = setInterval(fetchLogs, 10000)
 
     return () => {
       clearInterval(priceInterval)
       clearInterval(statusInterval)
       clearInterval(tradesInterval)
+      clearInterval(logsInterval)
     }
-  }, [fetchStatus, fetchPrices, fetchTrades, fetchSignals])
+  }, [fetchStatus, fetchPrices, fetchTrades, fetchSignals, fetchLogs])
 
   const config = data.config || INITIAL_CONFIG
 
@@ -203,7 +215,7 @@ export default function Dashboard() {
               </div>
             </CardHeader>
             <CardContent>
-              <SignalFeed signals={signals} logs={data.logs} />
+              <SignalFeed signals={signals} logs={logs} />
             </CardContent>
           </Card>
         </div>
