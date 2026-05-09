@@ -92,12 +92,10 @@ export default function Dashboard() {
   }, [])
 
   const fetchLogs = useCallback(async () => {
-    const { data, error } = await supabaseBrowser
-      .from('bot_logs')
-      .select('*')
-      .order('timestamp', { ascending: false })
-      .limit(30)
-    if (!error && data) setLogs(data as BotLog[])
+    try {
+      const res = await fetch('/api/logs?limit=30', { cache: 'no-store' })
+      if (res.ok) setLogs(await res.json())
+    } catch {}
   }, [])
 
   // Main data intervals
