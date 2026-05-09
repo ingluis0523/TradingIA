@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+
 import { NextRequest, NextResponse } from 'next/server'
 import { getRecentSignals } from '@/lib/supabase'
 import { generateSignal } from '@/lib/strategy/signals'

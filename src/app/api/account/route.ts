@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+
 import { NextResponse } from 'next/server'
 import { getAccountInfo } from '@/lib/binance'
 import { getPerformanceMetrics } from '@/lib/supabase'

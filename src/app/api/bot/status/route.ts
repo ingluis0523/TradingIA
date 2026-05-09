@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+
 import { NextResponse } from 'next/server'
 import { getBotConfig, getOpenTrades, getRecentLogs, getPerformanceMetrics } from '@/lib/supabase'
 import type { Trade, BotLog } from '@/types/trading'
