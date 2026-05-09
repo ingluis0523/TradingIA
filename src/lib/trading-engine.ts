@@ -32,16 +32,18 @@ export async function runTradingTick(): Promise<EngineResult> {
     // ── Load configuration ──────────────────────────────────────────────────
     const config = await getBotConfig()
     if (!config) {
-      result.message = 'Bot no configurado'
+      result.message = 'Bot no configurado en Supabase'
+      await log('WARN', '⚠️ Tick recibido pero el bot no está configurado aún')
       return result
     }
     if (!config.isRunning) {
       result.message = 'Bot detenido'
       result.success = true
+      await log('INFO', '⏸️ Tick recibido — bot en pausa (presiona Iniciar Bot para activar)')
       return result
     }
 
-    await log('INFO', '⚙️ Iniciando tick del motor de trading')
+    await log('INFO', `⚙️ Tick iniciado — analizando ${config.symbols.length} pares | Capital: $${config.currentCapital?.toFixed(2)}`)
 
     // ── Load account and open trades ────────────────────────────────────────
     const [account, openTrades] = await Promise.all([
