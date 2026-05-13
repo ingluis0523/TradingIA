@@ -40,16 +40,20 @@ export async function generateSignal(ctx: SignalContext): Promise<Signal | null>
   if (!atr || atr === 0) return null
 
   // ── 4H Trend Filter ───────────────────────────────────────────────────────
-  const bullishTrend4h = ind4h.ema20 > ind4h.ema50 && currentPrice > ind4h.ema200
-  const bearishTrend4h = ind4h.ema20 < ind4h.ema50 && currentPrice < ind4h.ema200
+  // EMA20>EMA50 is the primary trend gate; EMA200 is checked with 3% tolerance
+  // so entries near a key EMA level aren't excluded unfairly.
+  const bullishTrend4h = ind4h.ema20 > ind4h.ema50 && currentPrice > ind4h.ema200 * 0.97
+  const bearishTrend4h = ind4h.ema20 < ind4h.ema50 && currentPrice < ind4h.ema200 * 1.03
 
   if (!bullishTrend4h && !bearishTrend4h) return null
 
-  // ── 1H MACD Cross (momentum shift) ────────────────────────────────────────
-  const macdCrossedUp =
-    ind1hPrev.macdHistogram < 0 && ind1h.macdHistogram > 0
-  const macdCrossedDown =
-    ind1hPrev.macdHistogram > 0 && ind1h.macdHistogram < 0
+  // ── 1H MACD Momentum ──────────────────────────────────────────────────────
+  // Require histogram in the right direction AND growing — catches entries
+  // throughout the move, not only the single crossover candle each hour.
+  const macdBullish =
+    ind1h.macdHistogram > 0 && ind1h.macdHistogram > ind1hPrev.macdHistogram
+  const macdBearish =
+    ind1h.macdHistogram < 0 && ind1h.macdHistogram < ind1hPrev.macdHistogram
 
   // ── 1H RSI Filter ─────────────────────────────────────────────────────────
   const rsiLong = ind1h.rsi14 >= 35 && ind1h.rsi14 <= 68
@@ -60,8 +64,9 @@ export async function generateSignal(ctx: SignalContext): Promise<Signal | null>
   const stBearish = ind1h.superTrendDirection === 'DOWN'
 
   // ── Volume Confirmation ────────────────────────────────────────────────────
+  // At or above the 20-period average is sufficient — 1.1× was too selective.
   const volumeConfirmed =
-    candles1h[candles1h.length - 1].volume > ind1h.volumeSMA20 * 1.1
+    candles1h[candles1h.length - 1].volume >= ind1h.volumeSMA20
 
   // ── Trend Strength ─────────────────────────────────────────────────────────
   const trendStrong = ind1h.adx14 > 20
@@ -69,7 +74,7 @@ export async function generateSignal(ctx: SignalContext): Promise<Signal | null>
   // ── Build Signal ──────────────────────────────────────────────────────────
   const isLong =
     bullishTrend4h &&
-    macdCrossedUp &&
+    macdBullish &&
     rsiLong &&
     stBullish &&
     volumeConfirmed &&
@@ -77,7 +82,7 @@ export async function generateSignal(ctx: SignalContext): Promise<Signal | null>
 
   const isShort =
     bearishTrend4h &&
-    macdCrossedDown &&
+    macdBearish &&
     rsiShort &&
     stBearish &&
     volumeConfirmed &&

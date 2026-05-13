@@ -71,8 +71,8 @@ export function checkCanOpenPosition(
   }
 
   // Minimum signal strength
-  if (signal.strength < 55) {
-    return { allowed: false, reason: `Señal débil (strength: ${signal.strength}/100, mínimo: 55)` }
+  if (signal.strength < 52) {
+    return { allowed: false, reason: `Señal débil (strength: ${signal.strength}/100, mínimo: 52)` }
   }
 
   return { allowed: true }
