@@ -393,7 +393,8 @@ async function managePosition(
         side: slSide,
         type: 'STOP_MARKET',
         stopPrice: beSl,
-        closePosition: true,
+        quantity: trade.quantity,
+        reduceOnly: true,
       })
       await updateTrade(trade.id, { stopLoss: beSl, stopOrderId: String(newSlOrder.orderId) })
       await log('INFO', `🔒 SL movido a break-even en ${trade.symbol}: ${beSl}`)
@@ -425,7 +426,8 @@ async function managePosition(
           side: slSide,
           type: 'STOP_MARKET',
           stopPrice: roundedSl,
-          closePosition: true,
+          quantity: trade.quantity,
+          reduceOnly: true,
         })
         await updateTrade(trade.id, { stopLoss: roundedSl, stopOrderId: String(trailOrder.orderId) })
         await log('INFO', `🔄 Trailing stop actualizado en ${trade.symbol}: ${roundedSl}`)
