@@ -142,6 +142,22 @@ export default function Dashboard() {
     }
   }, [])
 
+  // Supabase Realtime: refresh active trades instantly on any trade change
+  useEffect(() => {
+    const channel = supabaseBrowser
+      .channel('trades-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'trades' },
+        () => { fetchStatus() }
+      )
+      .subscribe()
+
+    return () => {
+      supabaseBrowser.removeChannel(channel)
+    }
+  }, [fetchStatus])
+
   const config = data.config || INITIAL_CONFIG
 
   return (
