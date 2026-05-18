@@ -9,8 +9,13 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
 // Client for server use (full permissions)
+// custom fetch disables Next.js data cache so queries always return fresh data
 export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey || supabaseAnonKey, {
   auth: { autoRefreshToken: false, persistSession: false },
+  global: {
+    fetch: (url: RequestInfo | URL, init?: RequestInit) =>
+      fetch(url, { ...init, cache: 'no-store' }),
+  },
 })
 
 // ─── Bot Config ─────────────────────────────────────────────────────────────
