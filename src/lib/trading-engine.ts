@@ -115,24 +115,9 @@ async function reconcileOrphanedPositions(
 
     await log('WARN', `⚠️ Posición huérfana detectada en ${symbol}: ${side} ${posQty} @ ${entryPrice}. Creando registro y SL de emergencia.`)
 
-    // Place emergency stop loss at 2% against position
-    const slSide = side === 'BUY' ? 'SELL' : 'BUY'
     const direction = side === 'BUY' ? 1 : -1
     const emergencySl = roundPrice(entryPrice * (1 - direction * 0.02), symbolInfo.pricePrecision)
-    let slOrderId: string | undefined
-
-    try {
-      const slOrder = await placeOrder({
-        symbol,
-        side: slSide,
-        type: 'STOP_MARKET',
-        stopPrice: emergencySl,
-        closePosition: true,
-      })
-      slOrderId = String(slOrder.orderId)
-    } catch (e) {
-      await log('ERROR', `❌ No se pudo colocar SL de emergencia para ${symbol}: ${e instanceof Error ? e.message : String(e)}`)
-    }
+    const slOrderId: string | undefined = undefined
 
     try {
       await createTrade({
@@ -273,19 +258,7 @@ async function openPosition(
 
   result.tradesOpened++
 
-  // 3. SL — closePosition:true closes the entire position; do NOT add reduceOnly simultaneously
-  try {
-    const slOrder = await placeOrder({
-      symbol,
-      side: slSide,
-      type: 'STOP_MARKET',
-      stopPrice: slPrice,
-      closePosition: true,
-    })
-    await updateTrade(trade.id, { stopOrderId: String(slOrder.orderId) })
-  } catch (e) {
-    await log('WARN', `⚠️ SL no colocado en ${symbol}: ${e instanceof Error ? e.message : String(e)}`)
-  }
+  // 3. SL — managed by software in managePosition (STOP_MARKET not supported on Testnet)
 
   // 4. TP1 — partial close (50%), uses reduceOnly + explicit quantity
   const tp1Qty = roundQty(ps.quantity * 0.5, symbolInfo.qtyPrecision)
@@ -342,6 +315,17 @@ async function managePosition(
     (p) => p.symbol === trade.symbol && Math.abs(p.positionAmt) > 0,
   )
 
+  // ── Software stop loss check ──────────────────────────────────────────────
+  if (stillOpenOnBinance) {
+    const slBreached = trade.side === 'BUY'
+      ? currentPrice <= trade.stopLoss
+      : currentPrice >= trade.stopLoss
+    if (slBreached) {
+      await closePositionEarly(trade, currentPrice, `Stop Loss activado (SL: ${trade.stopLoss})`)
+      return true
+    }
+  }
+
   if (!stillOpenOnBinance) {
     // Position was closed by TP or SL on exchange — mark DB record accordingly
     const pnl = (currentPrice - trade.entryPrice) * direction * trade.quantity - trade.fee
@@ -379,28 +363,8 @@ async function managePosition(
     const beSl = roundPrice(trade.entryPrice * (1 + direction * 0.001), symbolInfo.pricePrecision)
     const slSide = trade.side === 'BUY' ? 'SELL' : 'BUY'
 
-    if (trade.stopOrderId) {
-      try {
-        await cancelOrder(trade.symbol, parseInt(trade.stopOrderId))
-      } catch {
-        // May already be filled — ignore
-      }
-    }
-
-    try {
-      const newSlOrder = await placeOrder({
-        symbol: trade.symbol,
-        side: slSide,
-        type: 'STOP_MARKET',
-        stopPrice: beSl,
-        quantity: trade.quantity,
-        reduceOnly: true,
-      })
-      await updateTrade(trade.id, { stopLoss: beSl, stopOrderId: String(newSlOrder.orderId) })
-      await log('INFO', `🔒 SL movido a break-even en ${trade.symbol}: ${beSl}`)
-    } catch (e) {
-      await log('WARN', `⚠️ No se pudo mover SL a break-even en ${trade.symbol}: ${e instanceof Error ? e.message : String(e)}`)
-    }
+    await updateTrade(trade.id, { stopLoss: beSl })
+    await log('INFO', `🔒 SL movido a break-even en ${trade.symbol}: ${beSl}`)
   }
 
   // ── Trailing stop after TP1 ────────────────────────────────────────────────
@@ -412,28 +376,8 @@ async function managePosition(
       const roundedSl = roundPrice(newSl, symbolInfo.pricePrecision)
       const slSide = trade.side === 'BUY' ? 'SELL' : 'BUY'
 
-      if (trade.stopOrderId) {
-        try {
-          await cancelOrder(trade.symbol, parseInt(trade.stopOrderId))
-        } catch {
-          // May already be filled
-        }
-      }
-
-      try {
-        const trailOrder = await placeOrder({
-          symbol: trade.symbol,
-          side: slSide,
-          type: 'STOP_MARKET',
-          stopPrice: roundedSl,
-          quantity: trade.quantity,
-          reduceOnly: true,
-        })
-        await updateTrade(trade.id, { stopLoss: roundedSl, stopOrderId: String(trailOrder.orderId) })
-        await log('INFO', `🔄 Trailing stop actualizado en ${trade.symbol}: ${roundedSl}`)
-      } catch (e) {
-        await log('WARN', `⚠️ No se pudo actualizar trailing stop en ${trade.symbol}: ${e instanceof Error ? e.message : String(e)}`)
-      }
+      await updateTrade(trade.id, { stopLoss: roundedSl })
+      await log('INFO', `🔄 Trailing stop actualizado en ${trade.symbol}: ${roundedSl}`)
     }
   }
 
