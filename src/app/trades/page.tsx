@@ -126,11 +126,11 @@ export default function TradesPage() {
                           <td className="px-3 py-3 number-mono text-foreground/90 whitespace-nowrap">
                             {trade.exitPrice ? `$${trade.exitPrice.toLocaleString()}` : <span className="text-muted-foreground">—</span>}
                           </td>
-                          <td className={cn('px-3 py-3 number-mono font-semibold whitespace-nowrap', trade.pnl !== undefined ? (positive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400') : 'text-muted-foreground')}>
-                            {trade.pnl !== undefined ? (positive ? '+' : '') + formatCurrency(trade.pnl) : '—'}
+                          <td className={cn('px-3 py-3 number-mono font-semibold whitespace-nowrap', trade.pnl != null ? (positive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400') : 'text-muted-foreground')}>
+                            {trade.pnl != null ? (positive ? '+' : '') + formatCurrency(trade.pnl) : '—'}
                           </td>
-                          <td className={cn('px-3 py-3 number-mono font-semibold whitespace-nowrap', trade.pnlPct !== undefined ? (positive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400') : 'text-muted-foreground')}>
-                            {trade.pnlPct !== undefined ? formatPercent(trade.pnlPct) : '—'}
+                          <td className={cn('px-3 py-3 number-mono font-semibold whitespace-nowrap', trade.pnlPct != null ? (positive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400') : 'text-muted-foreground')}>
+                            {trade.pnlPct != null ? formatPercent(trade.pnlPct) : '—'}
                           </td>
                           <td className="px-3 py-3">
                             <Badge variant={trade.status === 'OPEN' ? 'info' : trade.status === 'CLOSED' ? ((trade.pnl || 0) >= 0 ? 'success' : 'destructive') : 'secondary'}>
