@@ -205,8 +205,12 @@ async function openPosition(
   const slSide = side === 'BUY' ? 'SELL' : 'BUY'
   const leverage = config.leverage
 
-  await setLeverage(symbol, leverage)
-  await setMarginType(symbol, config.marginType)
+  try { await setLeverage(symbol, leverage) } catch (e) {
+    await log('WARN', `⚠️ setLeverage falló en ${symbol} (continuando): ${e instanceof Error ? e.message : String(e)}`)
+  }
+  try { await setMarginType(symbol, config.marginType) } catch (e) {
+    await log('WARN', `⚠️ setMarginType falló en ${symbol} (continuando): ${e instanceof Error ? e.message : String(e)}`)
+  }
 
   const ps = calculatePositionSize(
     config.currentCapital,
