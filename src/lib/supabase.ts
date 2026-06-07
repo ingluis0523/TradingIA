@@ -261,6 +261,11 @@ function mapTrade(row: Record<string, unknown>): Trade {
     openedAt: row.opened_at as string,
     closedAt: row.closed_at as string | undefined,
     notes: row.notes as string | undefined,
+    userId: row.user_id as string | undefined,
+    clientOrderId: row.client_order_id as string | undefined,
+    actualEntryPrice: row.actual_entry_price as number | undefined,
+    actualExitPrice: row.actual_exit_price as number | undefined,
+    realizedPnlBinance: row.realized_pnl_binance as number | undefined,
   }
 }
 

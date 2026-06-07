@@ -3,7 +3,7 @@ export type TradingSymbol = 'BTCUSDT' | 'ETHUSDT' | 'SOLUSDT' | 'BNBUSDT' | 'XRP
 export type OrderSide = 'BUY' | 'SELL'
 export type OrderType = 'MARKET' | 'LIMIT' | 'STOP_MARKET' | 'TAKE_PROFIT_MARKET'
 export type PositionSide = 'LONG' | 'SHORT' | 'BOTH'
-export type TradeStatus = 'OPEN' | 'CLOSED' | 'CANCELLED' | 'PARTIAL'
+export type TradeStatus = 'PENDING' | 'OPEN' | 'CLOSED' | 'CANCELLED' | 'PARTIAL'
 export type SignalType = 'LONG' | 'SHORT' | 'CLOSE' | 'HOLD'
 export type BotStatus = 'RUNNING' | 'STOPPED' | 'ERROR' | 'PAUSED'
 export type MarginType = 'ISOLATED' | 'CROSSED'
@@ -87,6 +87,12 @@ export interface Trade {
   closedAt?: string
   signal?: Partial<Signal>
   notes?: string
+  // Added in migration 001 (multi-tenant foundation)
+  userId?: string
+  clientOrderId?: string
+  actualEntryPrice?: number
+  actualExitPrice?: number
+  realizedPnlBinance?: number
 }
 
 export interface Position {
@@ -194,9 +200,41 @@ export const DEFAULT_INDICATOR_CONFIG: IndicatorConfig = {
   adxPeriod: 14,
 }
 
+// Multi-tenant user config (replaces singleton BotConfig in phase 2+)
+export interface UserBotConfig {
+  userId: string
+  isRunning: boolean
+  symbols: TradingSymbol[]
+  leverage: number
+  riskPerTrade: number
+  maxPositions: number
+  maxDailyLoss: number
+  tradingAllocationPct: number
+  marginType: 'ISOLATED'
+  strategy: string
+  timeframe: string
+  minSignalStrength: number
+  pausedUntil?: string
+  pausedReason?: string
+  updatedAt: string
+}
+
+export interface AppUser {
+  id: string
+  email: string
+  displayName?: string
+  role: 'admin' | 'trader' | 'system'
+  isActive: boolean
+  createdAt: string
+  updatedAt: string
+}
+
 export const TRADING_SYMBOLS: TradingSymbol[] = [
   'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
 ]
+
+// Default symbols exclude SOLUSDT (stricter filters; can be re-enabled per user)
+export const DEFAULT_SYMBOLS: TradingSymbol[] = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'XRPUSDT']
 
 export const SYMBOL_INFO: Record<TradingSymbol, { name: string; icon: string; minQty: number; qtyPrecision: number; pricePrecision: number }> = {
   BTCUSDT:  { name: 'Bitcoin',  icon: '₿',  minQty: 0.001, qtyPrecision: 3, pricePrecision: 1 },
