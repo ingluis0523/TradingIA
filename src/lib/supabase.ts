@@ -266,6 +266,7 @@ function mapTrade(row: Record<string, unknown>): Trade {
     actualEntryPrice: row.actual_entry_price as number | undefined,
     actualExitPrice: row.actual_exit_price as number | undefined,
     realizedPnlBinance: row.realized_pnl_binance as number | undefined,
+    isShadow: (row.is_shadow as boolean) ?? false,
   }
 }
 

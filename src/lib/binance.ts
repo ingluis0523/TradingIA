@@ -1,5 +1,6 @@
 import CryptoJS from 'crypto-js'
 import type { Candle, AccountInfo, Position, Ticker, TradingSymbol } from '@/types/trading'
+import { getBinanceBaseUrl } from './trading-mode'
 
 // ─── Credentials & Client Interface ──────────────────────────────────────────
 
@@ -507,7 +508,7 @@ export function createBinanceClient(credentials: BinanceCredentials): BinanceCli
 export const defaultClient = createBinanceClient({
   apiKey: process.env.BINANCE_API_KEY!,
   apiSecret: process.env.BINANCE_API_SECRET!,
-  baseUrl: process.env.BINANCE_BASE_URL || 'https://testnet.binancefuture.com',
+  baseUrl: process.env.BINANCE_BASE_URL || getBinanceBaseUrl((process.env.TRADING_MODE || 'testnet') as 'testnet' | 'mainnet'),
 })
 
 // ─── Backwards-compatible module-level exports (delegate to defaultClient) ───

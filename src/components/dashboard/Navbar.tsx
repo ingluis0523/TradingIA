@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
@@ -16,6 +16,11 @@ const nav = [
   { href: '/settings',  label: 'Configuración', icon: Settings    },
 ]
 
+interface ModeFlags {
+  tradingMode: 'testnet' | 'mainnet'
+  shadowMode: boolean
+}
+
 interface NavbarProps {
   botRunning?: boolean
 }
@@ -24,9 +29,34 @@ export function Navbar({ botRunning }: NavbarProps) {
   const pathname = usePathname()
   const { theme, toggle } = useTheme()
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [mode, setMode] = useState<ModeFlags | null>(null)
+
+  useEffect(() => {
+    fetch('/api/system/mode')
+      .then((r) => r.json())
+      .then((data: ModeFlags) => setMode(data))
+      .catch(() => {})
+  }, [])
 
   return (
     <nav className="sticky top-0 z-50 border-b border-border/60 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+      {/* Mode banner */}
+      {mode?.shadowMode && (
+        <div className="flex items-center justify-center bg-yellow-500/20 border-b border-yellow-500/50 text-yellow-300 px-3 py-1.5 text-xs font-medium">
+          🔬 SHADOW MODE — operaciones simuladas, no se ejecutan órdenes reales
+        </div>
+      )}
+      {mode?.tradingMode === 'testnet' && !mode?.shadowMode && (
+        <div className="flex items-center justify-center bg-blue-500/20 border-b border-blue-500/50 text-blue-300 px-3 py-1.5 text-xs font-medium">
+          🧪 TESTNET — operando con fondos de prueba
+        </div>
+      )}
+      {mode?.tradingMode === 'mainnet' && !mode?.shadowMode && (
+        <div className="flex items-center justify-center bg-red-500/20 border-b border-red-500/50 text-red-300 px-3 py-1.5 text-xs font-medium">
+          🔴 MAINNET — operaciones con dinero real
+        </div>
+      )}
+
       {/* Main bar */}
       <div className="flex h-14 items-center px-4 md:px-6 gap-3">
 
@@ -123,7 +153,7 @@ export function Navbar({ botRunning }: NavbarProps) {
                 : 'bg-muted border-border text-muted-foreground'
             )}>
               <div className={cn('w-2 h-2 rounded-full', botRunning ? 'bg-green-500 animate-pulse' : 'bg-muted-foreground')} />
-              Testnet · Futuros USDT-M · {botRunning ? 'Bot activo' : 'Bot inactivo'}
+              {mode?.tradingMode?.toUpperCase() ?? 'TESTNET'} · Futuros USDT-M · {botRunning ? 'Bot activo' : 'Bot inactivo'}
             </div>
           </div>
         </div>

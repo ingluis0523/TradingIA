@@ -24,6 +24,7 @@ import {
 } from './strategy/risk'
 import { calculateIndicators } from './strategy/indicators'
 import { saveSignal, supabaseAdmin } from './supabase'
+import { getCurrentMode } from './trading-mode'
 import type { BotConfig, Signal, Trade, TradingSymbol, UserBotConfig } from '@/types/trading'
 import { TRADING_SYMBOLS, SYMBOL_INFO } from '@/types/trading'
 
@@ -150,29 +151,41 @@ async function runTradingTickForUser(userId: string): Promise<UserTickResult> {
     return tickResult
   }
 
-  const openTrades = await getOpenTradesForUser(userId)
+  const { shadowMode } = getCurrentMode()
 
-  // ── Resolve stale PENDING trades ──────────────────────────────────────────
-  const pendingTrades = openTrades.filter((t) => t.status === 'PENDING')
-  for (const pt of pendingTrades) {
-    await resolveStalePending(pt, account.positions, userId)
+  const allOpenTrades = await getOpenTradesForUser(userId)
+  // Each mode manages only its own trades; allows shadow + real to coexist
+  const openTrades = allOpenTrades.filter((t) => (t.isShadow ?? false) === shadowMode)
+
+  // ── Resolve stale PENDING trades (real mode only) ─────────────────────────
+  if (!shadowMode) {
+    const pendingTrades = openTrades.filter((t) => t.status === 'PENDING')
+    for (const pt of pendingTrades) {
+      await resolveStalePending(pt, account.positions, userId)
+    }
   }
 
   // Refresh open trades after resolving pending
   const activeTrades = openTrades.filter((t) => t.status === 'OPEN')
 
-  // ── Reconcile Binance positions ───────────────────────────────────────────
-  await reconcilePositions(userId, account.positions, activeTrades, userConfig, tickResult, client)
+  // ── Reconcile Binance positions (real mode only) ──────────────────────────
+  // Shadow trades are virtual — nothing to reconcile with Binance
+  if (!shadowMode) {
+    await reconcilePositions(userId, account.positions, activeTrades, userConfig, tickResult, client)
+  }
 
   // ── Daily loss snapshot ───────────────────────────────────────────────────
   const recentTrades = await getRecentTradesForUser(userId, 200)
-  const dailyLoss = calculateDailyLoss(recentTrades, account.positions)
+  // For daily loss in shadow mode, only count shadow trades
+  const relevantRecent = recentTrades.filter((t) => (t.isShadow ?? false) === shadowMode)
+  const dailyLoss = calculateDailyLoss(relevantRecent, shadowMode ? [] : account.positions)
 
   const allocatedCapital = getAllocatedCapital(account, userConfig)
   const dailyLossThreshold = allocatedCapital * userConfig.maxDailyLoss
 
   if (dailyLoss.totalLoss >= dailyLossThreshold) {
-    await logUser(userId, 'WARN', `⚠️ Límite pérdida diaria: ${(dailyLoss.totalLoss).toFixed(2)} >= ${dailyLossThreshold.toFixed(2)}. Pausando 24h.`)
+    const modeLabel = shadowMode ? '[SHADOW] ' : ''
+    await logUser(userId, 'WARN', `⚠️ ${modeLabel}Límite pérdida diaria: ${(dailyLoss.totalLoss).toFixed(2)} >= ${dailyLossThreshold.toFixed(2)}. Pausando 24h.`)
     await pauseUserUntil(userId, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), 'Límite de pérdida diaria alcanzado')
     return tickResult
   }
@@ -181,13 +194,14 @@ async function runTradingTickForUser(userId: string): Promise<UserTickResult> {
 
   // Refresh after reconcile
   const freshTrades = await getOpenTradesForUser(userId)
-  const freshOpen = freshTrades.filter((t) => t.status === 'OPEN')
+  const freshOpen = freshTrades.filter((t) => t.status === 'OPEN' && (t.isShadow ?? false) === shadowMode)
 
-  await logUser(userId, 'INFO', `⚙️ Tick — ${userConfig.symbols.length} pares | Capital asignado: $${allocatedCapital.toFixed(2)}`)
+  const modeStr = shadowMode ? '[SHADOW] ' : ''
+  await logUser(userId, 'INFO', `⚙️ ${modeStr}Tick — ${userConfig.symbols.length} pares | Capital asignado: $${allocatedCapital.toFixed(2)}`)
 
   for (const symbol of userConfig.symbols) {
     try {
-      await processSymbolForUser(symbol, userId, config, account, freshOpen, dailyLoss, tickResult, client)
+      await processSymbolForUser(symbol, userId, config, account, freshOpen, dailyLoss, shadowMode, tickResult, client)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       tickResult.errors.push(`${symbol}: ${msg}`)
@@ -429,6 +443,7 @@ async function processSymbolForUser(
   account: Awaited<ReturnType<typeof defaultClient.getAccountInfo>>,
   openTrades: Trade[],
   dailyLoss: DailyLossSnapshot,
+  shadowMode: boolean,
   result: UserTickResult,
   client: typeof defaultClient,
 ): Promise<void> {
@@ -441,7 +456,9 @@ async function processSymbolForUser(
 
   const existingTrade = openTrades.find((t) => t.symbol === symbol && t.status === 'OPEN')
   if (existingTrade) {
-    const closed = await manageOpenPosition(existingTrade, currentPrice, candles1h, config, account.positions, userId, client)
+    const closed = shadowMode
+      ? await manageShadowPosition(existingTrade, currentPrice, candles1h, userId)
+      : await manageOpenPosition(existingTrade, currentPrice, candles1h, config, account.positions, userId, client)
     if (closed) result.tradesClosed++
     return
   }
@@ -465,7 +482,7 @@ async function processSymbolForUser(
     return
   }
 
-  await openPositionForUser(symbol, userId, signal, config, result, client)
+  await openPositionForUser(symbol, userId, signal, config, shadowMode, result, client)
 }
 
 // ─── Open Position ────────────────────────────────────────────────────────────
@@ -475,6 +492,7 @@ async function openPositionForUser(
   userId: string,
   signal: Signal,
   config: BotConfig,
+  shadowMode: boolean,
   result: UserTickResult,
   client: typeof defaultClient,
 ): Promise<void> {
@@ -483,12 +501,14 @@ async function openPositionForUser(
   const slSide = side === 'BUY' ? 'SELL' : 'BUY'
   const leverage = config.leverage
 
-  // Step 1: set leverage / margin type (non-fatal)
-  try { await client.setLeverage(symbol, leverage) } catch (e) {
-    await logUser(userId, 'WARN', `⚠️ setLeverage ${symbol}: ${e instanceof Error ? e.message : String(e)}`)
-  }
-  try { await client.setMarginType(symbol, 'ISOLATED') } catch (e) {
-    await logUser(userId, 'WARN', `⚠️ setMarginType ${symbol}: ${e instanceof Error ? e.message : String(e)}`)
+  // Step 1: set leverage / margin type (real mode only)
+  if (!shadowMode) {
+    try { await client.setLeverage(symbol, leverage) } catch (e) {
+      await logUser(userId, 'WARN', `⚠️ setLeverage ${symbol}: ${e instanceof Error ? e.message : String(e)}`)
+    }
+    try { await client.setMarginType(symbol, 'ISOLATED') } catch (e) {
+      await logUser(userId, 'WARN', `⚠️ setMarginType ${symbol}: ${e instanceof Error ? e.message : String(e)}`)
+    }
   }
 
   // Step 2: position size
@@ -517,12 +537,47 @@ async function openPositionForUser(
   const tp1ClientId = buildClientOrderId('t1', userId, symbol, intentId)
   const tp2ClientId = buildClientOrderId('t2', userId, symbol, intentId)
 
+  // ── SHADOW MODE branch ────────────────────────────────────────────────────
+  if (shadowMode) {
+    const simulatedFee = signal.price * ps.quantity * 0.0004
+    const trade = await createTradeRecord({
+      userId,
+      symbol,
+      side,
+      status: 'OPEN',
+      isShadow: true,
+      entryPrice: signal.price,
+      actualEntryPrice: signal.price,
+      quantity: ps.quantity,
+      leverage,
+      stopLoss: slPrice,
+      takeProfit1: tp1Price,
+      takeProfit2: tp2Price,
+      tp1Hit: false,
+      fee: simulatedFee,
+      binanceOrderId: `shadow-${intentId}`,
+      stopOrderId: `shadow-sl-${intentId}`,
+      tp1OrderId: `shadow-tp1-${intentId}`,
+      tp2OrderId: `shadow-tp2-${intentId}`,
+      clientOrderId: entryClientId,
+      openedAt: new Date().toISOString(),
+    })
+    result.tradesOpened++
+    await logUser(userId, 'TRADE', `[SHADOW] ✅ ENTRADA ${side} ${symbol} | Qty: ${ps.quantity} | Entry: ${signal.price} | SL: ${slPrice} | TP1: ${tp1Price} | TP2: ${tp2Price} | Riesgo: $${ps.riskAmount.toFixed(2)}`, {
+      tradeId: trade.id, symbol, side, quantity: ps.quantity, entryPrice: signal.price, stopLoss: slPrice,
+    })
+    return
+  }
+
+  // ── REAL MODE: Steps 4-9 ─────────────────────────────────────────────────
+
   // Step 4: save PENDING trade before placing order (crash safety)
   const trade = await createTradeRecord({
     userId,
     symbol,
     side,
     status: 'PENDING',
+    isShadow: false,
     entryPrice: signal.price,
     quantity: ps.quantity,
     leverage,
@@ -812,6 +867,128 @@ async function closePositionEarly(
   })
 }
 
+// ─── Shadow Position Management ──────────────────────────────────────────────
+
+async function manageShadowPosition(
+  trade: Trade,
+  currentPrice: number,
+  candles1h: Awaited<ReturnType<typeof defaultClient.getKlines>>,
+  userId: string,
+): Promise<boolean> {
+  const symbolInfo = SYMBOL_INFO[trade.symbol]
+  const direction = trade.side === 'BUY' ? 1 : -1
+
+  // 1. SL hit check
+  const slHit = trade.side === 'BUY'
+    ? currentPrice <= trade.stopLoss
+    : currentPrice >= trade.stopLoss
+
+  if (slHit) {
+    await closeShadowPosition(userId, trade, trade.stopLoss, 'Stop Loss simulado')
+    return true
+  }
+
+  // 2. TP1 check
+  if (!trade.tp1Hit) {
+    const tp1Hit = trade.side === 'BUY'
+      ? currentPrice >= trade.takeProfit1
+      : currentPrice <= trade.takeProfit1
+
+    if (tp1Hit) {
+      const partialQty = trade.quantity * 0.5
+      const partialPnl = (trade.takeProfit1 - trade.entryPrice) * direction * partialQty
+      const partialFee = trade.takeProfit1 * partialQty * 0.0004
+      const beSl = roundPrice(trade.entryPrice * (1 + direction * 0.001), symbolInfo.pricePrecision)
+
+      await updateTradeRecord(trade.id, {
+        tp1Hit: true,
+        stopLoss: beSl,
+        fee: trade.fee + partialFee,
+        notes: `${trade.notes ?? ''} | [SHADOW] TP1 @ ${trade.takeProfit1}, partial PnL: +${partialPnl.toFixed(2)}`.trim(),
+      })
+      await logUser(userId, 'TRADE', `[SHADOW] 🎯 TP1 simulado ${trade.symbol} @ ${trade.takeProfit1} | SL movido a BE: ${beSl}`)
+    }
+  }
+
+  // 3. TP2 check (only after TP1)
+  if (trade.tp1Hit) {
+    const tp2Hit = trade.side === 'BUY'
+      ? currentPrice >= trade.takeProfit2
+      : currentPrice <= trade.takeProfit2
+
+    if (tp2Hit) {
+      await closeShadowPosition(userId, trade, trade.takeProfit2, 'Take Profit 2 simulado')
+      return true
+    }
+
+    // 4. Trailing stop (only after TP1)
+    if (candles1h.length >= 210) {
+      const ind = calculateIndicators(candles1h)
+      const newSl = calculateTrailingStop(trade, currentPrice, ind.atr14)
+      if (newSl !== null) {
+        const roundedSl = roundPrice(newSl, symbolInfo.pricePrecision)
+        if (Math.abs(roundedSl - trade.stopLoss) / trade.stopLoss > 0.001) {
+          await updateTradeRecord(trade.id, { stopLoss: roundedSl })
+          await logUser(userId, 'INFO', `[SHADOW] 🔄 Trailing stop ${trade.symbol}: ${roundedSl}`)
+        }
+      }
+    }
+  }
+
+  // 5. Early exit check
+  if (candles1h.length >= 210) {
+    if (shouldCloseEarly(trade.side, candles1h, currentPrice, trade.entryPrice)) {
+      await closeShadowPosition(userId, trade, currentPrice, 'Cierre anticipado simulado (reversión)')
+      return true
+    }
+  }
+
+  return false
+}
+
+async function closeShadowPosition(
+  userId: string,
+  trade: Trade,
+  exitPrice: number,
+  reason: string,
+): Promise<void> {
+  const direction = trade.side === 'BUY' ? 1 : -1
+  const remainingQty = trade.tp1Hit ? trade.quantity * 0.5 : trade.quantity
+
+  let totalPnl: number
+  if (trade.tp1Hit) {
+    const partialPnl = (trade.takeProfit1 - trade.entryPrice) * direction * (trade.quantity * 0.5)
+    const remainingPnl = (exitPrice - trade.entryPrice) * direction * (trade.quantity * 0.5)
+    totalPnl = partialPnl + remainingPnl
+  } else {
+    totalPnl = (exitPrice - trade.entryPrice) * direction * trade.quantity
+  }
+
+  const closeFee = exitPrice * remainingQty * 0.0004
+  const totalFee = trade.fee + closeFee
+  const netPnl = totalPnl - totalFee
+  const margin = trade.entryPrice * trade.quantity / trade.leverage
+  const pnlPct = margin > 0 ? (netPnl / margin) * 100 : 0
+  const duration = Date.now() - new Date(trade.openedAt).getTime()
+
+  await updateTradeRecord(trade.id, {
+    status: 'CLOSED',
+    exitPrice,
+    actualExitPrice: exitPrice,
+    realizedPnlBinance: totalPnl,
+    pnl: netPnl,
+    pnlPct,
+    fee: totalFee,
+    duration,
+    closedAt: new Date().toISOString(),
+    notes: `[SHADOW] ${reason}`,
+  })
+
+  await logUser(userId, 'TRADE', `[SHADOW] 🔴 CIERRE ${trade.symbol} @ ${exitPrice} | PnL: $${netPnl.toFixed(2)} (${pnlPct.toFixed(2)}%) | ${reason}`, {
+    tradeId: trade.id, pnl: netPnl, pnlPct,
+  })
+}
+
 // ─── Inline Data Layer ────────────────────────────────────────────────────────
 // These functions will be moved to supabase.ts in Section 8.
 
@@ -953,6 +1130,7 @@ function mapTradeRow(row: Record<string, unknown>): Trade {
     actualEntryPrice: row.actual_entry_price as number | undefined,
     actualExitPrice: row.actual_exit_price as number | undefined,
     realizedPnlBinance: row.realized_pnl_binance as number | undefined,
+    isShadow: (row.is_shadow as boolean) ?? false,
   }
 }
 
@@ -985,6 +1163,7 @@ function mapTradeRowToDb(trade: Partial<Trade> & { userId?: string }): Record<st
   if (trade.actualEntryPrice !== undefined) db.actual_entry_price = trade.actualEntryPrice
   if (trade.actualExitPrice !== undefined) db.actual_exit_price = trade.actualExitPrice
   if (trade.realizedPnlBinance !== undefined) db.realized_pnl_binance = trade.realizedPnlBinance
+  if (trade.isShadow !== undefined) db.is_shadow = trade.isShadow
   return db
 }
 

@@ -93,6 +93,8 @@ export interface Trade {
   actualEntryPrice?: number
   actualExitPrice?: number
   realizedPnlBinance?: number
+  // Added in addendum 01a (shadow mode)
+  isShadow?: boolean
 }
 
 export interface Position {

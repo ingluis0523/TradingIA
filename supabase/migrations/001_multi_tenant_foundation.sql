@@ -131,8 +131,21 @@ update bot_logs set user_id = '00000000-0000-0000-0000-000000000001' where user_
 -- Después de migrar, marcar user_id como not null en trades
 alter table trades alter column user_id set not null;
 
+-- Después de migrar, marcar is_shadow=false en trades existentes
+update trades set is_shadow = false where is_shadow is null;
+
 -- ─────────────────────────────────────────────────────────────
 -- 2.4 Deprecación de tabla bot_config
 -- bot_config NO se elimina aquí. Se elimina en fase 3 cuando
 -- todo el código lea de user_bot_config en su lugar.
 -- ─────────────────────────────────────────────────────────────
+
+-- ─────────────────────────────────────────────────────────────
+-- 2.5 Shadow mode (Addendum 01a)
+-- ─────────────────────────────────────────────────────────────
+
+alter table trades
+  add column if not exists is_shadow boolean not null default false;
+
+create index if not exists trades_shadow_idx on trades (is_shadow);
+create index if not exists trades_user_shadow_status_idx on trades (user_id, is_shadow, status);
