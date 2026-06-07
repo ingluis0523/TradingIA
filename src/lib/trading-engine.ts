@@ -208,7 +208,7 @@ async function openPosition(
   try { await setLeverage(symbol, leverage) } catch (e) {
     await log('WARN', `⚠️ setLeverage falló en ${symbol} (continuando): ${e instanceof Error ? e.message : String(e)}`)
   }
-  try { await setMarginType(symbol, config.marginType) } catch (e) {
+  try { await setMarginType(symbol, 'ISOLATED') } catch (e) {
     await log('WARN', `⚠️ setMarginType falló en ${symbol} (continuando): ${e instanceof Error ? e.message : String(e)}`)
   }
 
