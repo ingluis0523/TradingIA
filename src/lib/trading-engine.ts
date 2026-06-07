@@ -1,6 +1,7 @@
 import { getKlines, getAccountInfo, placeOrder, cancelOrder, setLeverage, setMarginType, roundPrice, roundQty } from './binance'
 import { generateSignal, shouldCloseEarly } from './strategy/signals'
 import { calculatePositionSize, checkCanOpenPosition, calculateDailyLoss, calculateTrailingStop, validateRiskReward } from './strategy/risk'
+import type { DailyLossSnapshot } from './strategy/risk'
 import { calculateIndicators } from './strategy/indicators'
 import { getBotConfig, getOpenTrades, createTrade, updateTrade, saveSignal, addLog, updateBotConfig } from './supabase'
 import type { BotConfig, Signal, Trade, TradingSymbol } from '@/types/trading'
@@ -56,7 +57,7 @@ export async function runTradingTick(): Promise<EngineResult> {
     await reconcileOrphanedPositions(account.positions, openTrades, config, result)
 
     const dailyLoss = calculateDailyLoss(openTrades)
-    const dailyLossPct = config.currentCapital > 0 ? Math.abs(dailyLoss) / config.currentCapital : 0
+    const dailyLossPct = config.currentCapital > 0 ? dailyLoss.totalLoss / config.currentCapital : 0
 
     if (dailyLossPct >= config.maxDailyLoss) {
       await log('WARN', `⚠️ Límite de pérdida diaria alcanzado: ${(dailyLossPct * 100).toFixed(2)}%. Trading pausado.`)
@@ -153,7 +154,7 @@ async function processSymbol(
   config: BotConfig,
   account: AccountInfo,
   openTrades: Trade[],
-  dailyLoss: number,
+  dailyLoss: DailyLossSnapshot,
   result: EngineResult,
 ): Promise<void> {
   const [candles1h, candles4h] = await Promise.all([
