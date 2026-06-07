@@ -1,6 +1,20 @@
 import type { Candle, Signal, TradingSymbol, Indicators } from '@/types/trading'
 import { calculateIndicators, calculateIndicatorsPrev } from './indicators'
 
+interface SymbolFilters {
+  adxMin: number
+  ema200Tolerance: number  // decimal, e.g. 0.01 = 1%
+  volumeMultiplier: number // multiplier on volumeSMA20
+}
+
+const FILTERS_BY_SYMBOL: Record<TradingSymbol, SymbolFilters> = {
+  BTCUSDT: { adxMin: 18, ema200Tolerance: 0.01,  volumeMultiplier: 0.9 },
+  ETHUSDT: { adxMin: 20, ema200Tolerance: 0.01,  volumeMultiplier: 1.0 },
+  SOLUSDT: { adxMin: 25, ema200Tolerance: 0.005, volumeMultiplier: 1.2 },
+  BNBUSDT: { adxMin: 20, ema200Tolerance: 0.01,  volumeMultiplier: 1.0 },
+  XRPUSDT: { adxMin: 20, ema200Tolerance: 0.01,  volumeMultiplier: 1.0 },
+}
+
 export interface SignalContext {
   symbol: TradingSymbol
   candles1h: Candle[]
@@ -39,11 +53,13 @@ export async function generateSignal(ctx: SignalContext): Promise<Signal | null>
   const atr = ind1h.atr14
   if (!atr || atr === 0) return null
 
+  const filters = FILTERS_BY_SYMBOL[symbol]
+
   // ── 4H Trend Filter ───────────────────────────────────────────────────────
-  // EMA20>EMA50 is the primary trend gate; EMA200 is checked with 3% tolerance
-  // so entries near a key EMA level aren't excluded unfairly.
-  const bullishTrend4h = ind4h.ema20 > ind4h.ema50 && currentPrice > ind4h.ema200 * 0.97
-  const bearishTrend4h = ind4h.ema20 < ind4h.ema50 && currentPrice < ind4h.ema200 * 1.03
+  // EMA200 tolerance is per-symbol (default 1%); tighter than old 3% to avoid
+  // chasing entries too far from the trend anchor.
+  const bullishTrend4h = ind4h.ema20 > ind4h.ema50 && currentPrice > ind4h.ema200 * (1 - filters.ema200Tolerance)
+  const bearishTrend4h = ind4h.ema20 < ind4h.ema50 && currentPrice < ind4h.ema200 * (1 + filters.ema200Tolerance)
 
   if (!bullishTrend4h && !bearishTrend4h) return null
 
@@ -64,12 +80,12 @@ export async function generateSignal(ctx: SignalContext): Promise<Signal | null>
   const stBearish = ind1h.superTrendDirection === 'DOWN'
 
   // ── Volume Confirmation ────────────────────────────────────────────────────
-  // At or above the 20-period average is sufficient — 1.1× was too selective.
+  // Per-symbol multiplier: illiquid pairs (SOLUSDT) require stronger volume.
   const volumeConfirmed =
-    candles1h[candles1h.length - 1].volume >= ind1h.volumeSMA20
+    candles1h[candles1h.length - 1].volume >= ind1h.volumeSMA20 * filters.volumeMultiplier
 
   // ── Trend Strength ─────────────────────────────────────────────────────────
-  const trendStrong = ind1h.adx14 > 20
+  const trendStrong = ind1h.adx14 > filters.adxMin
 
   // ── Build Signal ──────────────────────────────────────────────────────────
   const isLong =

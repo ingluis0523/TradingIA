@@ -23,14 +23,24 @@ import {
   type DailyLossSnapshot,
 } from './strategy/risk'
 import { calculateIndicators } from './strategy/indicators'
-import { saveSignal, supabaseAdmin } from './supabase'
+import {
+  saveSignal,
+  SYSTEM_USER_ID,
+  isGlobalKillSwitchActive,
+  getActiveTradingUsers,
+  getUserBotConfig,
+  getOpenTradesForUser,
+  getRecentTradesForUser,
+  pauseUserUntil,
+  createTrade,
+  updateTrade,
+  addLogForUser,
+} from './supabase'
 import { getCurrentMode } from './trading-mode'
 import type { BotConfig, Signal, Trade, TradingSymbol, UserBotConfig } from '@/types/trading'
 import { TRADING_SYMBOLS, SYMBOL_INFO } from '@/types/trading'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const SYSTEM_USER_ID = process.env.SYSTEM_USER_ID || '00000000-0000-0000-0000-000000000001'
 
 // PENDING trades older than this are stale and need reconciliation
 const PENDING_STALE_MS = 5 * 60 * 1000
@@ -228,7 +238,7 @@ async function resolveStalePending(
 
   if (binancePos) {
     // Binance has the position — promote to OPEN
-    await updateTradeRecord(trade.id, {
+    await updateTrade(trade.id, {
       status: 'OPEN',
       actualEntryPrice: binancePos.entryPrice,
       notes: 'PENDING promovido a OPEN por reconciliación (posición encontrada en Binance)',
@@ -236,7 +246,7 @@ async function resolveStalePending(
     await logUser(userId, 'WARN', `⚠️ PENDING ${trade.symbol} promovido a OPEN (age=${Math.round(age / 1000)}s)`)
   } else {
     // No Binance position — the entry order never filled, cancel
-    await updateTradeRecord(trade.id, {
+    await updateTrade(trade.id, {
       status: 'CANCELLED',
       closedAt: new Date().toISOString(),
       notes: 'PENDING cancelado — sin posición en Binance tras timeout',
@@ -303,7 +313,7 @@ async function handleOrphanPosition(
   const tp2ClientId = buildClientOrderId('t2', userId, symbol, intentId)
 
   // Save to DB first (OPEN — we know the position exists)
-  const trade = await createTradeRecord({
+  const trade = await createTrade({
     userId,
     symbol,
     side,
@@ -340,7 +350,7 @@ async function handleOrphanPosition(
   }
 
   if (slOrderId) {
-    await updateTradeRecord(trade.id, { stopOrderId: slOrderId, clientOrderId: slClientId })
+    await updateTrade(trade.id, { stopOrderId: slOrderId, clientOrderId: slClientId })
   }
 
   // Place TP1
@@ -354,7 +364,7 @@ async function handleOrphanPosition(
       reduceOnly: true,
       clientOrderId: tp1ClientId,
     })
-    await updateTradeRecord(trade.id, { tp1OrderId: String(tp1Order.orderId) })
+    await updateTrade(trade.id, { tp1OrderId: String(tp1Order.orderId) })
   } catch (e) {
     await logUser(userId, 'WARN', `⚠️ TP1 huérfano no colocado en ${symbol}: ${e instanceof Error ? e.message : String(e)}`)
   }
@@ -370,7 +380,7 @@ async function handleOrphanPosition(
       reduceOnly: true,
       clientOrderId: tp2ClientId,
     })
-    await updateTradeRecord(trade.id, { tp2OrderId: String(tp2Order.orderId) })
+    await updateTrade(trade.id, { tp2OrderId: String(tp2Order.orderId) })
   } catch (e) {
     await logUser(userId, 'WARN', `⚠️ TP2 huérfano no colocado en ${symbol}: ${e instanceof Error ? e.message : String(e)}`)
   }
@@ -415,7 +425,7 @@ async function closeTradeFromBinanceHistory(
   const pnlPct = ((effectiveExit - trade.entryPrice) / trade.entryPrice) * direction * trade.leverage * 100
   const duration = Date.now() - new Date(trade.openedAt).getTime()
 
-  await updateTradeRecord(trade.id, {
+  await updateTrade(trade.id, {
     status: 'CLOSED',
     exitPrice: effectiveExit,
     actualExitPrice: exitPrice || undefined,
@@ -540,7 +550,7 @@ async function openPositionForUser(
   // ── SHADOW MODE branch ────────────────────────────────────────────────────
   if (shadowMode) {
     const simulatedFee = signal.price * ps.quantity * 0.0004
-    const trade = await createTradeRecord({
+    const trade = await createTrade({
       userId,
       symbol,
       side,
@@ -572,7 +582,7 @@ async function openPositionForUser(
   // ── REAL MODE: Steps 4-9 ─────────────────────────────────────────────────
 
   // Step 4: save PENDING trade before placing order (crash safety)
-  const trade = await createTradeRecord({
+  const trade = await createTrade({
     userId,
     symbol,
     side,
@@ -603,7 +613,7 @@ async function openPositionForUser(
     entryOrderId = String(entryOrder.orderId)
   } catch (err) {
     // Entry failed — cancel the PENDING record
-    await updateTradeRecord(trade.id, {
+    await updateTrade(trade.id, {
       status: 'CANCELLED',
       closedAt: new Date().toISOString(),
       notes: `Entrada fallida: ${err instanceof Error ? err.message : String(err)}`,
@@ -627,7 +637,7 @@ async function openPositionForUser(
   }
 
   // Step 7: promote to OPEN with actual entry price
-  await updateTradeRecord(trade.id, {
+  await updateTrade(trade.id, {
     status: 'OPEN',
     binanceOrderId: entryOrderId,
     actualEntryPrice,
@@ -647,13 +657,13 @@ async function openPositionForUser(
       clientOrderId: slClientId,
     })
     slOrderId = String(slOrder.orderId)
-    await updateTradeRecord(trade.id, { stopOrderId: slOrderId })
+    await updateTrade(trade.id, { stopOrderId: slOrderId })
   } catch (e) {
     await logUser(userId, 'WARN', `⚠️ SL nativo no colocado en ${symbol}: ${e instanceof Error ? e.message : String(e)}`)
     // Emergency close if SL fails
     try {
       await client.placeOrder({ symbol, side: slSide, type: 'MARKET', quantity: ps.quantity, reduceOnly: true })
-      await updateTradeRecord(trade.id, {
+      await updateTrade(trade.id, {
         status: 'CANCELLED',
         closedAt: new Date().toISOString(),
         notes: 'Posición cerrada de emergencia — fallo al colocar SL',
@@ -674,7 +684,7 @@ async function openPositionForUser(
       symbol, side: slSide, stopPrice: tp1Price,
       quantity: tp1Qty, reduceOnly: true, clientOrderId: tp1ClientId,
     })
-    await updateTradeRecord(trade.id, { tp1OrderId: String(tp1Order.orderId) })
+    await updateTrade(trade.id, { tp1OrderId: String(tp1Order.orderId) })
   } catch (e) {
     await logUser(userId, 'WARN', `⚠️ TP1 no colocado en ${symbol}: ${e instanceof Error ? e.message : String(e)}`)
   }
@@ -684,7 +694,7 @@ async function openPositionForUser(
       symbol, side: slSide, stopPrice: tp2Price,
       quantity: tp2Qty, reduceOnly: true, clientOrderId: tp2ClientId,
     })
-    await updateTradeRecord(trade.id, { tp2OrderId: String(tp2Order.orderId) })
+    await updateTrade(trade.id, { tp2OrderId: String(tp2Order.orderId) })
   } catch (e) {
     await logUser(userId, 'WARN', `⚠️ TP2 no colocado en ${symbol}: ${e instanceof Error ? e.message : String(e)}`)
   }
@@ -724,7 +734,7 @@ async function manageOpenPosition(
     try {
       const tp1Status = await client.getOrderStatus(trade.symbol, parseInt(trade.tp1OrderId))
       if (tp1Status === 'FILLED') {
-        await updateTradeRecord(trade.id, { tp1Hit: true })
+        await updateTrade(trade.id, { tp1Hit: true })
         await logUser(userId, 'TRADE', `🎯 TP1 alcanzado en ${trade.symbol} @ ${currentPrice}`)
 
         // Move SL to break-even
@@ -740,7 +750,7 @@ async function manageOpenPosition(
             reduceOnly: true,
             clientOrderId: newSlClientId,
           })
-          await updateTradeRecord(trade.id, { stopLoss: beSl, stopOrderId: String(newSlOrder.orderId) })
+          await updateTrade(trade.id, { stopLoss: beSl, stopOrderId: String(newSlOrder.orderId) })
           await logUser(userId, 'INFO', `🔒 SL movido a break-even ${trade.symbol}: ${beSl}`)
         } catch (e) {
           await logUser(userId, 'WARN', `⚠️ No se pudo mover SL a BE en ${trade.symbol}: ${e instanceof Error ? e.message : String(e)}`)
@@ -769,7 +779,7 @@ async function manageOpenPosition(
           reduceOnly: true,
           clientOrderId: newSlClientId,
         })
-        await updateTradeRecord(trade.id, { stopLoss: roundedSl, stopOrderId: String(newSlOrder.orderId) })
+        await updateTrade(trade.id, { stopLoss: roundedSl, stopOrderId: String(newSlOrder.orderId) })
         await logUser(userId, 'INFO', `🔄 Trailing stop actualizado ${trade.symbol}: ${roundedSl}`)
       } catch (e) {
         await logUser(userId, 'WARN', `⚠️ Trailing stop fallido en ${trade.symbol}: ${e instanceof Error ? e.message : String(e)}`)
@@ -849,7 +859,7 @@ async function closePositionEarly(
   const pnlPct = ((actualExitPrice - trade.entryPrice) / trade.entryPrice) * direction * trade.leverage * 100
   const duration = Date.now() - new Date(trade.openedAt).getTime()
 
-  await updateTradeRecord(trade.id, {
+  await updateTrade(trade.id, {
     status: 'CLOSED',
     exitPrice: actualExitPrice,
     actualExitPrice,
@@ -900,7 +910,7 @@ async function manageShadowPosition(
       const partialFee = trade.takeProfit1 * partialQty * 0.0004
       const beSl = roundPrice(trade.entryPrice * (1 + direction * 0.001), symbolInfo.pricePrecision)
 
-      await updateTradeRecord(trade.id, {
+      await updateTrade(trade.id, {
         tp1Hit: true,
         stopLoss: beSl,
         fee: trade.fee + partialFee,
@@ -928,7 +938,7 @@ async function manageShadowPosition(
       if (newSl !== null) {
         const roundedSl = roundPrice(newSl, symbolInfo.pricePrecision)
         if (Math.abs(roundedSl - trade.stopLoss) / trade.stopLoss > 0.001) {
-          await updateTradeRecord(trade.id, { stopLoss: roundedSl })
+          await updateTrade(trade.id, { stopLoss: roundedSl })
           await logUser(userId, 'INFO', `[SHADOW] 🔄 Trailing stop ${trade.symbol}: ${roundedSl}`)
         }
       }
@@ -971,7 +981,7 @@ async function closeShadowPosition(
   const pnlPct = margin > 0 ? (netPnl / margin) * 100 : 0
   const duration = Date.now() - new Date(trade.openedAt).getTime()
 
-  await updateTradeRecord(trade.id, {
+  await updateTrade(trade.id, {
     status: 'CLOSED',
     exitPrice,
     actualExitPrice: exitPrice,
@@ -987,184 +997,6 @@ async function closeShadowPosition(
   await logUser(userId, 'TRADE', `[SHADOW] 🔴 CIERRE ${trade.symbol} @ ${exitPrice} | PnL: $${netPnl.toFixed(2)} (${pnlPct.toFixed(2)}%) | ${reason}`, {
     tradeId: trade.id, pnl: netPnl, pnlPct,
   })
-}
-
-// ─── Inline Data Layer ────────────────────────────────────────────────────────
-// These functions will be moved to supabase.ts in Section 8.
-
-async function isGlobalKillSwitchActive(): Promise<boolean> {
-  try {
-    const { data } = await supabaseAdmin
-      .from('global_kill_switch')
-      .select('is_active')
-      .order('activated_at', { ascending: false })
-      .limit(1)
-      .single()
-    return data?.is_active === true
-  } catch {
-    return false
-  }
-}
-
-async function getActiveTradingUsers(): Promise<{ id: string }[]> {
-  try {
-    const { data, error } = await supabaseAdmin
-      .from('user_bot_config')
-      .select('user_id')
-      .eq('is_running', true)
-    if (error || !data || data.length === 0) {
-      return [{ id: SYSTEM_USER_ID }]
-    }
-    return data.map((r) => ({ id: r.user_id as string }))
-  } catch {
-    return [{ id: SYSTEM_USER_ID }]
-  }
-}
-
-async function getUserBotConfig(userId: string): Promise<UserBotConfig | null> {
-  try {
-    const { data, error } = await supabaseAdmin
-      .from('user_bot_config')
-      .select('*')
-      .eq('user_id', userId)
-      .single()
-    if (error || !data) return null
-    return {
-      userId: data.user_id as string,
-      isRunning: data.is_running as boolean,
-      symbols: (data.symbols as string[]) as UserBotConfig['symbols'],
-      leverage: data.leverage as number,
-      riskPerTrade: data.risk_per_trade as number,
-      maxPositions: data.max_positions as number,
-      maxDailyLoss: data.max_daily_loss as number,
-      tradingAllocationPct: (data.trading_allocation_pct as number) ?? 1.0,
-      marginType: 'ISOLATED',
-      strategy: data.strategy as string,
-      timeframe: data.timeframe as string,
-      minSignalStrength: (data.min_signal_strength as number) ?? 60,
-      pausedUntil: data.paused_until as string | undefined,
-      pausedReason: data.paused_reason as string | undefined,
-      updatedAt: data.updated_at as string,
-    }
-  } catch {
-    return null
-  }
-}
-
-async function getOpenTradesForUser(userId: string): Promise<Trade[]> {
-  const { data, error } = await supabaseAdmin
-    .from('trades')
-    .select('*')
-    .eq('user_id', userId)
-    .in('status', ['OPEN', 'PENDING'])
-    .order('opened_at', { ascending: false })
-  if (error) throw error
-  return (data || []).map(mapTradeRow)
-}
-
-async function getRecentTradesForUser(userId: string, limit: number): Promise<Trade[]> {
-  const { data, error } = await supabaseAdmin
-    .from('trades')
-    .select('*')
-    .eq('user_id', userId)
-    .order('opened_at', { ascending: false })
-    .limit(limit)
-  if (error) throw error
-  return (data || []).map(mapTradeRow)
-}
-
-async function pauseUserUntil(userId: string, until: string, reason: string): Promise<void> {
-  await supabaseAdmin
-    .from('user_bot_config')
-    .update({ paused_until: until, paused_reason: reason, is_running: false })
-    .eq('user_id', userId)
-}
-
-async function createTradeRecord(trade: Omit<Trade, 'id'> & { userId: string }): Promise<Trade> {
-  const { data, error } = await supabaseAdmin
-    .from('trades')
-    .insert(mapTradeRowToDb(trade))
-    .select()
-    .single()
-  if (error) throw error
-  return mapTradeRow(data)
-}
-
-async function updateTradeRecord(id: string, updates: Partial<Trade> & { userId?: string }): Promise<void> {
-  const { error } = await supabaseAdmin
-    .from('trades')
-    .update(mapTradeRowToDb(updates))
-    .eq('id', id)
-  if (error) throw error
-}
-
-// ─── Mappers ──────────────────────────────────────────────────────────────────
-
-function mapTradeRow(row: Record<string, unknown>): Trade {
-  return {
-    id: row.id as string,
-    symbol: row.symbol as Trade['symbol'],
-    side: row.side as Trade['side'],
-    status: row.status as Trade['status'],
-    entryPrice: row.entry_price as number,
-    exitPrice: row.exit_price as number | undefined,
-    quantity: row.quantity as number,
-    leverage: row.leverage as number,
-    stopLoss: row.stop_loss as number,
-    takeProfit1: row.take_profit1 as number,
-    takeProfit2: row.take_profit2 as number,
-    tp1Hit: row.tp1_hit as boolean,
-    pnl: row.pnl as number | undefined,
-    pnlPct: row.pnl_pct as number | undefined,
-    fee: (row.fee as number) ?? 0,
-    duration: row.duration as number | undefined,
-    binanceOrderId: row.binance_order_id as string | undefined,
-    stopOrderId: row.stop_order_id as string | undefined,
-    tp1OrderId: row.tp1_order_id as string | undefined,
-    tp2OrderId: row.tp2_order_id as string | undefined,
-    openedAt: row.opened_at as string,
-    closedAt: row.closed_at as string | undefined,
-    notes: row.notes as string | undefined,
-    userId: row.user_id as string | undefined,
-    clientOrderId: row.client_order_id as string | undefined,
-    actualEntryPrice: row.actual_entry_price as number | undefined,
-    actualExitPrice: row.actual_exit_price as number | undefined,
-    realizedPnlBinance: row.realized_pnl_binance as number | undefined,
-    isShadow: (row.is_shadow as boolean) ?? false,
-  }
-}
-
-function mapTradeRowToDb(trade: Partial<Trade> & { userId?: string }): Record<string, unknown> {
-  const db: Record<string, unknown> = {}
-  if (trade.userId !== undefined) db.user_id = trade.userId
-  if (trade.symbol !== undefined) db.symbol = trade.symbol
-  if (trade.side !== undefined) db.side = trade.side
-  if (trade.status !== undefined) db.status = trade.status
-  if (trade.entryPrice !== undefined) db.entry_price = trade.entryPrice
-  if (trade.exitPrice !== undefined) db.exit_price = trade.exitPrice
-  if (trade.quantity !== undefined) db.quantity = trade.quantity
-  if (trade.leverage !== undefined) db.leverage = trade.leverage
-  if (trade.stopLoss !== undefined) db.stop_loss = trade.stopLoss
-  if (trade.takeProfit1 !== undefined) db.take_profit1 = trade.takeProfit1
-  if (trade.takeProfit2 !== undefined) db.take_profit2 = trade.takeProfit2
-  if (trade.tp1Hit !== undefined) db.tp1_hit = trade.tp1Hit
-  if (trade.pnl !== undefined) db.pnl = trade.pnl
-  if (trade.pnlPct !== undefined) db.pnl_pct = trade.pnlPct
-  if (trade.fee !== undefined) db.fee = trade.fee
-  if (trade.duration !== undefined) db.duration = trade.duration
-  if (trade.binanceOrderId !== undefined) db.binance_order_id = trade.binanceOrderId
-  if (trade.stopOrderId !== undefined) db.stop_order_id = trade.stopOrderId
-  if (trade.tp1OrderId !== undefined) db.tp1_order_id = trade.tp1OrderId
-  if (trade.tp2OrderId !== undefined) db.tp2_order_id = trade.tp2OrderId
-  if (trade.openedAt !== undefined) db.opened_at = trade.openedAt
-  if (trade.closedAt !== undefined) db.closed_at = trade.closedAt
-  if (trade.notes !== undefined) db.notes = trade.notes
-  if (trade.clientOrderId !== undefined) db.client_order_id = trade.clientOrderId
-  if (trade.actualEntryPrice !== undefined) db.actual_entry_price = trade.actualEntryPrice
-  if (trade.actualExitPrice !== undefined) db.actual_exit_price = trade.actualExitPrice
-  if (trade.realizedPnlBinance !== undefined) db.realized_pnl_binance = trade.realizedPnlBinance
-  if (trade.isShadow !== undefined) db.is_shadow = trade.isShadow
-  return db
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -1201,13 +1033,7 @@ async function logUser(
 ): Promise<void> {
   const ts = new Date().toISOString()
   console.log(`[${level}][${userId.slice(0, 8)}] ${message}`)
-  await supabaseAdmin.from('bot_logs').insert({
-    user_id: userId,
-    level,
-    message,
-    data: data ?? null,
-    timestamp: ts,
-  })
+  await addLogForUser(userId, { level, message, data, timestamp: ts })
 }
 
 async function logSystem(

@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import type { BotConfig, BotLog, Trade, Signal, PerformanceMetrics } from '@/types/trading'
+import type { BotConfig, BotLog, Trade, Signal, PerformanceMetrics, UserBotConfig } from '@/types/trading'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -7,6 +7,8 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
 // Client for browser use (limited permissions)
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+
+export const SYSTEM_USER_ID = process.env.SYSTEM_USER_ID || '00000000-0000-0000-0000-000000000001'
 
 // Client for server use (full permissions)
 // custom fetch disables Next.js data cache so queries always return fresh data
@@ -234,6 +236,167 @@ function calculateSharpeRatio(trades: Trade[]): number {
   return stdDev > 0 ? (avg / stdDev) * Math.sqrt(52) : 0
 }
 
+// ─── Multi-Tenant Engine Support ─────────────────────────────────────────────
+
+export async function isGlobalKillSwitchActive(): Promise<boolean> {
+  try {
+    const { data } = await supabaseAdmin
+      .from('global_kill_switch')
+      .select('is_active')
+      .order('activated_at', { ascending: false })
+      .limit(1)
+      .single()
+    return data?.is_active === true
+  } catch {
+    return false
+  }
+}
+
+export async function setGlobalKillSwitch(active: boolean, reason?: string): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from('global_kill_switch')
+    .insert({ is_active: active, reason: reason ?? null, activated_at: new Date().toISOString() })
+  if (error) throw error
+}
+
+export async function getActiveTradingUsers(): Promise<{ id: string }[]> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('user_bot_config')
+      .select('user_id')
+      .eq('is_running', true)
+    if (error || !data || data.length === 0) return [{ id: SYSTEM_USER_ID }]
+    return data.map((r) => ({ id: r.user_id as string }))
+  } catch {
+    return [{ id: SYSTEM_USER_ID }]
+  }
+}
+
+export async function getUserBotConfig(userId: string): Promise<UserBotConfig | null> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('user_bot_config')
+      .select('*')
+      .eq('user_id', userId)
+      .single()
+    if (error || !data) return null
+    return {
+      userId: data.user_id as string,
+      isRunning: data.is_running as boolean,
+      symbols: (data.symbols as string[]) as UserBotConfig['symbols'],
+      leverage: data.leverage as number,
+      riskPerTrade: data.risk_per_trade as number,
+      maxPositions: data.max_positions as number,
+      maxDailyLoss: data.max_daily_loss as number,
+      tradingAllocationPct: (data.trading_allocation_pct as number) ?? 1.0,
+      marginType: 'ISOLATED',
+      strategy: data.strategy as string,
+      timeframe: data.timeframe as string,
+      minSignalStrength: (data.min_signal_strength as number) ?? 60,
+      pausedUntil: data.paused_until as string | undefined,
+      pausedReason: data.paused_reason as string | undefined,
+      updatedAt: data.updated_at as string,
+    }
+  } catch {
+    return null
+  }
+}
+
+export async function updateUserBotConfig(
+  userId: string,
+  updates: Partial<Omit<UserBotConfig, 'userId' | 'updatedAt'>>,
+): Promise<void> {
+  const db: Record<string, unknown> = {
+    user_id: userId,
+    updated_at: new Date().toISOString(),
+  }
+  if (updates.isRunning !== undefined) db.is_running = updates.isRunning
+  if (updates.symbols !== undefined) db.symbols = updates.symbols
+  if (updates.leverage !== undefined) db.leverage = updates.leverage
+  if (updates.riskPerTrade !== undefined) db.risk_per_trade = updates.riskPerTrade
+  if (updates.maxPositions !== undefined) db.max_positions = updates.maxPositions
+  if (updates.maxDailyLoss !== undefined) db.max_daily_loss = updates.maxDailyLoss
+  if (updates.tradingAllocationPct !== undefined) db.trading_allocation_pct = updates.tradingAllocationPct
+  if (updates.strategy !== undefined) db.strategy = updates.strategy
+  if (updates.timeframe !== undefined) db.timeframe = updates.timeframe
+  if (updates.minSignalStrength !== undefined) db.min_signal_strength = updates.minSignalStrength
+  if (updates.pausedUntil !== undefined) db.paused_until = updates.pausedUntil
+  if (updates.pausedReason !== undefined) db.paused_reason = updates.pausedReason
+
+  const { error } = await supabaseAdmin
+    .from('user_bot_config')
+    .upsert(db, { onConflict: 'user_id' })
+  if (error) throw error
+}
+
+export async function pauseUserUntil(userId: string, until: string, reason: string): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from('user_bot_config')
+    .update({ paused_until: until, paused_reason: reason, is_running: false })
+    .eq('user_id', userId)
+  if (error) throw error
+}
+
+export async function getOpenTradesForUser(userId: string): Promise<Trade[]> {
+  const { data, error } = await supabaseAdmin
+    .from('trades')
+    .select('*')
+    .eq('user_id', userId)
+    .in('status', ['OPEN', 'PENDING'])
+    .order('opened_at', { ascending: false })
+  if (error) throw error
+  return (data || []).map(mapTrade)
+}
+
+export async function getRecentTradesForUser(userId: string, limit: number): Promise<Trade[]> {
+  const { data, error } = await supabaseAdmin
+    .from('trades')
+    .select('*')
+    .eq('user_id', userId)
+    .order('opened_at', { ascending: false })
+    .limit(limit)
+  if (error) throw error
+  return (data || []).map(mapTrade)
+}
+
+export async function addLogForUser(
+  userId: string,
+  log: Omit<BotLog, 'id'>,
+): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from('bot_logs')
+    .insert({
+      user_id: userId,
+      level: log.level,
+      message: log.message,
+      data: log.data ?? null,
+      timestamp: log.timestamp,
+    })
+  if (error) console.error('Error adding user log:', error)
+}
+
+export async function getOrCreateDailyCapitalSnapshot(
+  userId: string,
+  date: string,
+  initialCapital: number,
+): Promise<number> {
+  const { data, error } = await supabaseAdmin
+    .from('user_capital_snapshots')
+    .select('initial_capital')
+    .eq('user_id', userId)
+    .eq('date', date)
+    .maybeSingle()
+  if (error) throw error
+  if (data) return data.initial_capital as number
+
+  const { error: insertError } = await supabaseAdmin
+    .from('user_capital_snapshots')
+    .insert({ user_id: userId, date, initial_capital: initialCapital })
+  if (insertError) throw insertError
+
+  return initialCapital
+}
+
 // ─── Mappers ─────────────────────────────────────────────────────────────────
 
 function mapTrade(row: Record<string, unknown>): Trade {
@@ -294,6 +457,12 @@ function mapTradeToDb(trade: Partial<Trade>): Record<string, unknown> {
   if (trade.openedAt !== undefined) db.opened_at = trade.openedAt
   if (trade.closedAt !== undefined) db.closed_at = trade.closedAt
   if (trade.notes !== undefined) db.notes = trade.notes
+  if (trade.userId !== undefined) db.user_id = trade.userId
+  if (trade.clientOrderId !== undefined) db.client_order_id = trade.clientOrderId
+  if (trade.actualEntryPrice !== undefined) db.actual_entry_price = trade.actualEntryPrice
+  if (trade.actualExitPrice !== undefined) db.actual_exit_price = trade.actualExitPrice
+  if (trade.realizedPnlBinance !== undefined) db.realized_pnl_binance = trade.realizedPnlBinance
+  if (trade.isShadow !== undefined) db.is_shadow = trade.isShadow
   return db
 }
 

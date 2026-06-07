@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { runTradingTick } from '@/lib/trading-engine'
-import { addLog } from '@/lib/supabase'
+import { addLog, isGlobalKillSwitchActive } from '@/lib/supabase'
 
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get('authorization')
@@ -10,11 +10,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // Write a heartbeat log immediately — before any engine logic
   const cronAt = new Date().toISOString()
   await addLog({ level: 'INFO', message: `🕐 Cron recibido — ${cronAt}`, timestamp: cronAt })
 
   try {
+    // Fast exit before spinning up the engine
+    const killActive = await isGlobalKillSwitchActive()
+    if (killActive) {
+      await addLog({ level: 'WARN', message: '🛑 Kill switch activo — cron abortado', timestamp: new Date().toISOString() })
+      return NextResponse.json({ success: true, message: 'Kill switch activo — trading suspendido' })
+    }
+
     const result = await runTradingTick()
     return NextResponse.json(result)
   } catch (err) {
