@@ -175,7 +175,7 @@ export function TradingChart({ className }: TradingChartProps) {
         <span className="flex items-center gap-1.5">
           <span className="w-4 h-0.5 bg-yellow-500 inline-block" />EMA 50
         </span>
-        <span className="ml-auto text-muted-foreground/60">Fuente: Binance Testnet</span>
+        <span className="ml-auto text-muted-foreground/60">Fuente: Binance Futures</span>
       </div>
     </div>
   )

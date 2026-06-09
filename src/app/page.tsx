@@ -202,7 +202,7 @@ export default function Dashboard() {
           <div className="lg:col-span-2">
             <Card>
               <CardHeader>
-                <CardTitle>Gráfico de Precios — Testnet Binance</CardTitle>
+                <CardTitle>Gráfico de Precios</CardTitle>
               </CardHeader>
               <CardContent>
                 <TradingChart />
