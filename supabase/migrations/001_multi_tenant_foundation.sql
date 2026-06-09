@@ -131,8 +131,15 @@ update bot_logs set user_id = '00000000-0000-0000-0000-000000000001' where user_
 -- Después de migrar, marcar user_id como not null en trades
 alter table trades alter column user_id set not null;
 
--- Después de migrar, marcar is_shadow=false en trades existentes
-update trades set is_shadow = false where is_shadow is null;
+-- Ampliar check constraint de status para incluir PENDING (Phase 1)
+do $$
+begin
+  alter table trades drop constraint if exists trades_status_check;
+  alter table trades
+    add constraint trades_status_check
+    check (status in ('PENDING', 'OPEN', 'CLOSED', 'CANCELLED', 'PARTIAL'));
+exception when others then null;
+end$$;
 
 -- ─────────────────────────────────────────────────────────────
 -- 2.4 Deprecación de tabla bot_config
