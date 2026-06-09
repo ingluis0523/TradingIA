@@ -193,7 +193,7 @@ async function runTradingTickForUser(userId: string): Promise<UserTickResult> {
   const allocatedCapital = getAllocatedCapital(account, userConfig)
   const dailyLossThreshold = allocatedCapital * userConfig.maxDailyLoss
 
-  if (dailyLoss.totalLoss >= dailyLossThreshold) {
+  if (dailyLossThreshold > 0 && dailyLoss.totalLoss >= dailyLossThreshold) {
     const modeLabel = shadowMode ? '[SHADOW] ' : ''
     await logUser(userId, 'WARN', `⚠️ ${modeLabel}Límite pérdida diaria: ${(dailyLoss.totalLoss).toFixed(2)} >= ${dailyLossThreshold.toFixed(2)}. Pausando 24h.`)
     await pauseUserUntil(userId, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), 'Límite de pérdida diaria alcanzado')
