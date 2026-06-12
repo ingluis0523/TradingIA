@@ -6,10 +6,6 @@ export async function POST() {
   try {
     const config = await getBotConfig()
 
-    if (config?.isRunning) {
-      return NextResponse.json({ success: false, message: 'Bot ya está corriendo' })
-    }
-
     const symbols = config?.symbols || TRADING_SYMBOLS
     const leverage = config?.leverage || Number(process.env.BOT_DEFAULT_LEVERAGE || 3)
     const riskPerTrade = config?.riskPerTrade || Number(process.env.BOT_RISK_PER_TRADE || 0.02)
