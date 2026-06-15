@@ -473,7 +473,12 @@ async function processSymbolForUser(
     return
   }
 
-  const signal = await generateSignal({ symbol, candles1h, candles4h, currentPrice })
+  const signal = await generateSignal({
+    symbol, candles1h, candles4h, currentPrice,
+    slAtrMult: config.slAtrMult,
+    tp1AtrMult: config.tp1AtrMult,
+    tp2AtrMult: config.tp2AtrMult,
+  })
   if (!signal) return
 
   result.signalsGenerated++
@@ -1022,6 +1027,9 @@ function adaptConfig(config: UserBotConfig, allocatedCapital: number): BotConfig
     marginType: config.marginType,
     strategy: config.strategy,
     timeframe: config.timeframe,
+    slAtrMult: config.slAtrMult,
+    tp1AtrMult: config.tp1AtrMult,
+    tp2AtrMult: config.tp2AtrMult,
   }
 }
 

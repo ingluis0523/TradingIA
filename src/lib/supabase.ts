@@ -293,6 +293,9 @@ export async function getUserBotConfig(userId: string): Promise<UserBotConfig | 
       strategy: data.strategy as string,
       timeframe: data.timeframe as string,
       minSignalStrength: (data.min_signal_strength as number) ?? 60,
+      slAtrMult: (data.sl_atr_mult as number) ?? 2.2,
+      tp1AtrMult: (data.tp1_atr_mult as number) ?? 2.0,
+      tp2AtrMult: (data.tp2_atr_mult as number) ?? 3.5,
       pausedUntil: data.paused_until as string | undefined,
       pausedReason: data.paused_reason as string | undefined,
       updatedAt: data.updated_at as string,
@@ -320,6 +323,9 @@ export async function updateUserBotConfig(
   if (updates.strategy !== undefined) db.strategy = updates.strategy
   if (updates.timeframe !== undefined) db.timeframe = updates.timeframe
   if (updates.minSignalStrength !== undefined) db.min_signal_strength = updates.minSignalStrength
+  if (updates.slAtrMult !== undefined) db.sl_atr_mult = updates.slAtrMult
+  if (updates.tp1AtrMult !== undefined) db.tp1_atr_mult = updates.tp1AtrMult
+  if (updates.tp2AtrMult !== undefined) db.tp2_atr_mult = updates.tp2AtrMult
   if (updates.pausedUntil !== undefined) db.paused_until = updates.pausedUntil
   if (updates.pausedReason !== undefined) db.paused_reason = updates.pausedReason
 

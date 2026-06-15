@@ -133,6 +133,9 @@ export interface BotConfig {
   strategy: string
   timeframe: string
   updatedAt?: string
+  slAtrMult?: number
+  tp1AtrMult?: number
+  tp2AtrMult?: number
 }
 
 export interface PerformanceMetrics {
@@ -218,6 +221,9 @@ export interface UserBotConfig {
   strategy: string
   timeframe: string
   minSignalStrength: number
+  slAtrMult: number
+  tp1AtrMult: number
+  tp2AtrMult: number
   pausedUntil?: string
   pausedReason?: string
   updatedAt: string
