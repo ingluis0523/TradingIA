@@ -31,4 +31,7 @@ next-env.d.ts
 .DS_Store
 Thumbs.db
 
+# Backtest historical data (large JSON files, fetched on demand)
+data/
+
 .vercel
