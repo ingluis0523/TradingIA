@@ -1,6 +1,105 @@
 import type { Signal, Trade, AccountInfo, BotConfig, TradingSymbol } from '@/types/trading'
 import { roundQty } from '@/lib/binance'
 
+// ─── Circuit Breaker ──────────────────────────────────────────────────────────
+// Escalated response to drawdown — replaces the blunt 24h PAUSE_ALL.
+//
+// Tier 1 — 2 consecutive losses            → reduce size to 50% until next win
+// Tier 2 — 3 consecutive in same direction → pause that direction 6h, keep the other
+// Tier 3 — daily loss ≥ maxDailyLoss       → pause everything until tomorrow UTC
+
+export interface CircuitBreakerState {
+  consecutiveLosses: number
+  dailyLossPct: number
+  action: 'NONE' | 'REDUCE_SIZE' | 'PAUSE_DIRECTION' | 'PAUSE_ALL'
+  sizeMultiplier: number        // 1.0 = normal, 0.5 = half, 0 = paused
+  pausedDirection?: 'LONG' | 'SHORT'
+  pauseUntil?: Date
+  reason: string
+}
+
+/**
+ * Pure function — recomputed each tick from the last-24h closed trades.
+ * No DB state required; direction pause expires naturally when pauseUntil passes.
+ *
+ * @param closedTrades   CLOSED trades from the last 24h (already filtered by shadow mode)
+ * @param maxDailyLoss   Fraction of capital, e.g. 0.05 for 5%
+ * @param allocatedCapital  USD value of the trading allocation
+ */
+export function evaluateCircuitBreaker(
+  closedTrades: Trade[],
+  maxDailyLoss: number,
+  allocatedCapital: number,
+): CircuitBreakerState {
+  // Sort most-recent first
+  const sorted = [...closedTrades].sort(
+    (a, b) => new Date(b.closedAt!).getTime() - new Date(a.closedAt!).getTime(),
+  )
+
+  // Count consecutive losses from the most recent trade
+  let consecutiveLosses = 0
+  for (const t of sorted) {
+    if ((t.pnl ?? 0) < 0) consecutiveLosses++
+    else break
+  }
+
+  // Daily loss: sum of absolute losses in the window
+  const dailyLossAbs = closedTrades
+    .filter((t) => (t.pnl ?? 0) < 0)
+    .reduce((s, t) => s + Math.abs(t.pnl ?? 0), 0)
+  const dailyLossPct = allocatedCapital > 0 ? dailyLossAbs / allocatedCapital : 0
+
+  // ── Tier 3: total daily loss ─────────────────────────────────────────────
+  if (dailyLossPct >= maxDailyLoss) {
+    const tomorrow = new Date()
+    tomorrow.setUTCHours(24, 0, 0, 0)
+    return {
+      consecutiveLosses,
+      dailyLossPct,
+      action: 'PAUSE_ALL',
+      sizeMultiplier: 0,
+      pauseUntil: tomorrow,
+      reason: `Pérdida diaria ${(dailyLossPct * 100).toFixed(1)}% alcanzó el límite ${(maxDailyLoss * 100).toFixed(0)}%`,
+    }
+  }
+
+  // ── Tier 2: 3 consecutive losses, same direction ─────────────────────────
+  if (consecutiveLosses >= 3) {
+    const lastDir = sorted[0].side === 'BUY' ? 'LONG' : 'SHORT'
+    const sameDir = sorted
+      .slice(0, 3)
+      .every((t) => (t.side === 'BUY' ? 'LONG' : 'SHORT') === lastDir)
+
+    if (sameDir) {
+      // Pause expires 6h from when the 3rd loss was closed (not from "now")
+      const thirdLossTime = new Date(sorted[2].closedAt!).getTime()
+      const pauseUntil = new Date(thirdLossTime + 6 * 3600 * 1000)
+      return {
+        consecutiveLosses,
+        dailyLossPct,
+        action: 'PAUSE_DIRECTION',
+        sizeMultiplier: 0.5,
+        pausedDirection: lastDir,
+        pauseUntil,
+        reason: `3 pérdidas seguidas en ${lastDir}. Pausando ${lastDir} hasta ${pauseUntil.toISOString()}; dirección opuesta sigue activa.`,
+      }
+    }
+  }
+
+  // ── Tier 1: 2 consecutive losses (any direction) ─────────────────────────
+  if (consecutiveLosses >= 2) {
+    return {
+      consecutiveLosses,
+      dailyLossPct,
+      action: 'REDUCE_SIZE',
+      sizeMultiplier: 0.5,
+      reason: `${consecutiveLosses} pérdidas seguidas. Reduciendo tamaño al 50% hasta la próxima ganancia.`,
+    }
+  }
+
+  return { consecutiveLosses, dailyLossPct, action: 'NONE', sizeMultiplier: 1.0, reason: 'Normal' }
+}
+
 // ─── Position Sizing ──────────────────────────────────────────────────────────
 // Formula: qty = (capital × riskPct) / |entry - stopLoss|
 // Risks exactly riskPct% of capital per trade.

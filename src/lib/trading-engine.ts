@@ -20,7 +20,9 @@ import {
   calculateDailyLoss,
   calculateTrailingStop,
   validateRiskReward,
+  evaluateCircuitBreaker,
   type DailyLossSnapshot,
+  type CircuitBreakerState,
 } from './strategy/risk'
 import { calculateIndicators } from './strategy/indicators'
 import {
@@ -191,13 +193,22 @@ async function runTradingTickForUser(userId: string): Promise<UserTickResult> {
   const dailyLoss = calculateDailyLoss(relevantRecent, shadowMode ? [] : account.positions)
 
   const allocatedCapital = getAllocatedCapital(account, userConfig)
-  const dailyLossThreshold = allocatedCapital * userConfig.maxDailyLoss
 
-  if (dailyLossThreshold > 0 && dailyLoss.totalLoss >= dailyLossThreshold) {
-    const modeLabel = shadowMode ? '[SHADOW] ' : ''
-    await logUser(userId, 'WARN', `⚠️ ${modeLabel}Límite pérdida diaria: ${(dailyLoss.totalLoss).toFixed(2)} >= ${dailyLossThreshold.toFixed(2)}. Pausando 24h.`)
-    await pauseUserUntil(userId, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), 'Límite de pérdida diaria alcanzado')
+  // ── Circuit breaker (escalated, replaces the old single-threshold daily pause) ─
+  const closedToday = relevantRecent.filter(
+    (t) => t.status === 'CLOSED' && t.closedAt &&
+      new Date(t.closedAt).getTime() > Date.now() - 24 * 3600 * 1000,
+  )
+  const cbState = evaluateCircuitBreaker(closedToday, userConfig.maxDailyLoss, allocatedCapital)
+  const modeStr = shadowMode ? '[SHADOW] ' : ''
+
+  if (cbState.action === 'PAUSE_ALL') {
+    await logUser(userId, 'WARN', `⚠️ ${modeStr}Circuit breaker PAUSE_ALL: ${cbState.reason}`)
+    await pauseUserUntil(userId, cbState.pauseUntil!.toISOString(), cbState.reason)
     return tickResult
+  }
+  if (cbState.action !== 'NONE') {
+    await logUser(userId, 'INFO', `⚠️ ${modeStr}Circuit breaker ${cbState.action}: ${cbState.reason}`)
   }
 
   const config = adaptConfig(userConfig, allocatedCapital)
@@ -206,12 +217,11 @@ async function runTradingTickForUser(userId: string): Promise<UserTickResult> {
   const freshTrades = await getOpenTradesForUser(userId)
   const freshOpen = freshTrades.filter((t) => t.status === 'OPEN' && (t.isShadow ?? false) === shadowMode)
 
-  const modeStr = shadowMode ? '[SHADOW] ' : ''
   await logUser(userId, 'INFO', `⚙️ ${modeStr}Tick — ${userConfig.symbols.length} pares | Capital asignado: $${allocatedCapital.toFixed(2)}`)
 
   for (const symbol of userConfig.symbols) {
     try {
-      await processSymbolForUser(symbol, userId, config, account, freshOpen, dailyLoss, shadowMode, tickResult, client)
+      await processSymbolForUser(symbol, userId, config, account, freshOpen, dailyLoss, shadowMode, tickResult, client, cbState)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       tickResult.errors.push(`${symbol}: ${msg}`)
@@ -456,6 +466,7 @@ async function processSymbolForUser(
   shadowMode: boolean,
   result: UserTickResult,
   client: typeof defaultClient,
+  cbState: CircuitBreakerState,
 ): Promise<void> {
   const [candles1h, candles4h] = await Promise.all([
     client.getKlines(symbol, '1h', 250),
@@ -481,6 +492,19 @@ async function processSymbolForUser(
   })
   if (!signal) return
 
+  // ── Circuit breaker: directional pause ────────────────────────────────────
+  if (
+    cbState.action === 'PAUSE_DIRECTION' &&
+    cbState.pausedDirection &&
+    cbState.pauseUntil &&
+    new Date() < cbState.pauseUntil &&
+    signal.type === cbState.pausedDirection
+  ) {
+    await logUser(userId, 'INFO',
+      `⏸️ ${signal.type} bloqueado por circuit breaker en ${symbol} hasta ${cbState.pauseUntil.toISOString()}`)
+    return
+  }
+
   result.signalsGenerated++
   await saveSignal(signal)
   await logUser(userId, 'INFO', `📊 Señal ${signal.type} en ${symbol} | Strength: ${signal.strength}% | Precio: ${currentPrice}`)
@@ -497,7 +521,7 @@ async function processSymbolForUser(
     return
   }
 
-  await openPositionForUser(symbol, userId, signal, config, shadowMode, result, client)
+  await openPositionForUser(symbol, userId, signal, config, shadowMode, result, client, cbState.sizeMultiplier)
 }
 
 // ─── Open Position ────────────────────────────────────────────────────────────
@@ -510,6 +534,7 @@ async function openPositionForUser(
   shadowMode: boolean,
   result: UserTickResult,
   client: typeof defaultClient,
+  sizeMultiplier = 1.0,
 ): Promise<void> {
   const symbolInfo = SYMBOL_INFO[symbol]
   const side = signal.type === 'LONG' ? 'BUY' : 'SELL'
@@ -526,10 +551,10 @@ async function openPositionForUser(
     }
   }
 
-  // Step 2: position size
+  // Step 2: position size (sizeMultiplier < 1.0 when circuit breaker is active)
   const ps = calculatePositionSize(
     config.currentCapital,
-    config.riskPerTrade,
+    config.riskPerTrade * sizeMultiplier,
     signal.price,
     signal.stopLoss,
     leverage,
