@@ -152,48 +152,84 @@ export function superTrend(
   return { values, directions }
 }
 
-// ─── ADX ──────────────────────────────────────────────────────────────────────
+// ─── ADX (Wilder correcto) ────────────────────────────────────────────────────
 
-export function adx(candles: Candle[], period = 14): number[] {
-  const plusDM: number[] = [0]
-  const minusDM: number[] = [0]
-  const tr: number[] = [0]
+export function adxFull(
+  candles: Candle[],
+  period = 14,
+): { adx: number[]; diPlus: number[]; diMinus: number[] } {
+  const n = candles.length
+  const tr: number[] = new Array(n).fill(0)
+  const plusDM: number[] = new Array(n).fill(0)
+  const minusDM: number[] = new Array(n).fill(0)
 
-  for (let i = 1; i < candles.length; i++) {
+  for (let i = 1; i < n; i++) {
     const { high, low } = candles[i]
     const { high: pHigh, low: pLow, close: pClose } = candles[i - 1]
     const upMove = high - pHigh
     const downMove = pLow - low
-    plusDM.push(upMove > downMove && upMove > 0 ? upMove : 0)
-    minusDM.push(downMove > upMove && downMove > 0 ? downMove : 0)
-    tr.push(Math.max(high - low, Math.abs(high - pClose), Math.abs(low - pClose)))
+    plusDM[i] = upMove > downMove && upMove > 0 ? upMove : 0
+    minusDM[i] = downMove > upMove && downMove > 0 ? downMove : 0
+    tr[i] = Math.max(high - low, Math.abs(high - pClose), Math.abs(low - pClose))
   }
 
-  const smooth = (arr: number[], p: number) => {
-    const result: number[] = new Array(p).fill(NaN)
-    let s = arr.slice(1, p + 1).reduce((a, b) => a + b, 0)
-    result.push(s)
-    for (let i = p + 1; i < arr.length; i++) {
-      s = s - s / p + arr[i]
-      result.push(s)
+  // Wilder RMA: first value = simple average of first `period` values, then rma[i] = (rma[i-1]*(period-1) + x[i]) / period
+  const wilderRMA = (arr: number[]): number[] => {
+    const res: number[] = new Array(n).fill(NaN)
+    if (n <= period) return res
+    let sum = 0
+    for (let i = 1; i <= period; i++) sum += arr[i]
+    res[period] = sum / period
+    for (let i = period + 1; i < n; i++) {
+      res[i] = (res[i - 1] * (period - 1) + arr[i]) / period
     }
-    return result
+    return res
   }
 
-  const strTR = smooth(tr, period)
-  const strPlus = smooth(plusDM, period)
-  const strMinus = smooth(minusDM, period)
+  const atrRMA = wilderRMA(tr)
+  const plusRMA = wilderRMA(plusDM)
+  const minusRMA = wilderRMA(minusDM)
 
-  const diPlus = strPlus.map((v, i) => (isNaN(strTR[i]) || strTR[i] === 0 ? NaN : (v / strTR[i]) * 100))
-  const diMinus = strMinus.map((v, i) => (isNaN(strTR[i]) || strTR[i] === 0 ? NaN : (v / strTR[i]) * 100))
-  const dx = diPlus.map((v, i) => {
-    const sum = v + diMinus[i]
-    return isNaN(v) || sum === 0 ? NaN : (Math.abs(v - diMinus[i]) / sum) * 100
-  })
+  const diPlusArr: number[] = new Array(n).fill(NaN)
+  const diMinusArr: number[] = new Array(n).fill(NaN)
+  const dx: number[] = new Array(n).fill(NaN)
 
-  const validDx = dx.filter((v) => !isNaN(v))
-  const adxSmoothed = ema(validDx, period)
-  return new Array(dx.length - adxSmoothed.length).fill(NaN).concat(adxSmoothed)
+  for (let i = period; i < n; i++) {
+    if (isNaN(atrRMA[i]) || atrRMA[i] === 0) continue
+    diPlusArr[i] = (plusRMA[i] / atrRMA[i]) * 100
+    diMinusArr[i] = (minusRMA[i] / atrRMA[i]) * 100
+    const diSum = diPlusArr[i] + diMinusArr[i]
+    dx[i] = diSum === 0 ? 0 : (Math.abs(diPlusArr[i] - diMinusArr[i]) / diSum) * 100
+  }
+
+  // ADX = Wilder smoothing of DX (not EMA)
+  const adxArr: number[] = new Array(n).fill(NaN)
+  const firstDxIdx = dx.findIndex((v) => !isNaN(v))
+  if (firstDxIdx === -1) return { adx: adxArr, diPlus: diPlusArr, diMinus: diMinusArr }
+
+  const adxStartIdx = firstDxIdx + period - 1
+  if (adxStartIdx >= n) return { adx: adxArr, diPlus: diPlusArr, diMinus: diMinusArr }
+
+  let sumDx = 0
+  let count = 0
+  for (let i = firstDxIdx; i < firstDxIdx + period && i < n; i++) {
+    if (!isNaN(dx[i])) { sumDx += dx[i]; count++ }
+  }
+  if (count === 0) return { adx: adxArr, diPlus: diPlusArr, diMinus: diMinusArr }
+
+  adxArr[adxStartIdx] = sumDx / count
+  for (let i = adxStartIdx + 1; i < n; i++) {
+    adxArr[i] = isNaN(dx[i])
+      ? adxArr[i - 1]
+      : (adxArr[i - 1] * (period - 1) + dx[i]) / period
+  }
+
+  return { adx: adxArr, diPlus: diPlusArr, diMinus: diMinusArr }
+}
+
+// Wrapper for backward compatibility — callers that only need the ADX array
+export function adx(candles: Candle[], period = 14): number[] {
+  return adxFull(candles, period).adx
 }
 
 // ─── Volume MA ────────────────────────────────────────────────────────────────
@@ -227,7 +263,7 @@ export function calculateIndicators(candles: Candle[], config?: Partial<Indicato
   const atrValues = atr(candles, cfg.atrPeriod)
   const { upper, middle, lower } = bollingerBands(closes, cfg.bbPeriod, cfg.bbStdDev)
   const { values: stValues, directions: stDirections } = superTrend(candles, cfg.superTrendPeriod, cfg.superTrendMultiplier)
-  const adxValues = adx(candles, cfg.adxPeriod)
+  const { adx: adxValues, diPlus: diPlusValues, diMinus: diMinusValues } = adxFull(candles, cfg.adxPeriod)
   const volMA = volumeMA(candles, 20)
 
   return {
@@ -246,6 +282,8 @@ export function calculateIndicators(candles: Candle[], config?: Partial<Indicato
     superTrendDirection: stDirections[last],
     volumeSMA20: volMA[last],
     adx14: adxValues[last],
+    diPlus14: diPlusValues[last],
+    diMinus14: diMinusValues[last],
   }
 }
 

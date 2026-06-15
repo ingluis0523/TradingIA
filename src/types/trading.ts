@@ -45,6 +45,8 @@ export interface Indicators {
   superTrendDirection: 'UP' | 'DOWN'
   volumeSMA20: number
   adx14: number
+  diPlus14: number
+  diMinus14: number
 }
 
 export interface Signal {
