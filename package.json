@@ -10,7 +10,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "fetch-historical": "tsx scripts/fetch-historical.ts",
-    "backtest": "tsx scripts/backtest.ts"
+    "backtest": "tsx scripts/backtest.ts",
+    "test20": "tsx scripts/test20-bull-month.ts",
+    "test22": "tsx scripts/test22-sl-noise.ts"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.0.5",
