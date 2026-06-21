@@ -4,7 +4,7 @@ import { Navbar } from '@/components/dashboard/Navbar'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatCurrency, formatPercent, formatTimestamp, cn, timeAgo } from '@/lib/utils'
-import { SYMBOL_INFO } from '@/types/trading'
+import { getSymbolInfo } from '@/types/trading'
 import type { Trade, BotConfig } from '@/types/trading'
 import { TrendingUp, TrendingDown, Clock, CheckCircle2, XCircle, Filter } from 'lucide-react'
 
@@ -109,7 +109,7 @@ export default function TradesPage() {
                   <tbody>
                     {filtered.map((trade) => {
                       const positive = (trade.pnl || 0) >= 0
-                      const info = SYMBOL_INFO[trade.symbol]
+                      const info = getSymbolInfo(trade.symbol)
                       return (
                         <tr key={trade.id} className="border-b border-border/30 hover:bg-secondary/20 transition-colors">
                           <td className="px-3 py-3 font-medium whitespace-nowrap">

@@ -1,4 +1,4 @@
-export type TradingSymbol = 'BTCUSDT' | 'ETHUSDT' | 'SOLUSDT' | 'BNBUSDT' | 'XRPUSDT'
+export type TradingSymbol = 'BTCUSDT' | 'BNBUSDT' | 'ADAUSDT' | 'DOTUSDT'
 
 export type OrderSide = 'BUY' | 'SELL'
 export type OrderType = 'MARKET' | 'LIMIT' | 'STOP_MARKET' | 'TAKE_PROFIT_MARKET'
@@ -240,16 +240,23 @@ export interface AppUser {
 }
 
 export const TRADING_SYMBOLS: TradingSymbol[] = [
-  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
+  'BTCUSDT', 'BNBUSDT', 'ADAUSDT', 'DOTUSDT',
 ]
 
-// Default symbols exclude SOLUSDT (stricter filters; can be re-enabled per user)
-export const DEFAULT_SYMBOLS: TradingSymbol[] = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'XRPUSDT']
+export const DEFAULT_SYMBOLS: TradingSymbol[] = ['BTCUSDT', 'BNBUSDT', 'ADAUSDT', 'DOTUSDT']
 
+// Verified against GET /fapi/v1/exchangeInfo (2026-06-21):
+//   ADA: quantityPrecision=0, pricePrecision=5, LOT_SIZE minQty=1 stepSize=1
+//   DOT: quantityPrecision=1, pricePrecision=3, LOT_SIZE minQty=0.1 stepSize=0.1
 export const SYMBOL_INFO: Record<TradingSymbol, { name: string; icon: string; minQty: number; qtyPrecision: number; pricePrecision: number }> = {
   BTCUSDT:  { name: 'Bitcoin',  icon: '₿',  minQty: 0.001, qtyPrecision: 3, pricePrecision: 1 },
-  ETHUSDT:  { name: 'Ethereum', icon: 'Ξ',  minQty: 0.001, qtyPrecision: 3, pricePrecision: 2 },
-  SOLUSDT:  { name: 'Solana',   icon: '◎',  minQty: 0.1,   qtyPrecision: 1, pricePrecision: 3 },
   BNBUSDT:  { name: 'BNB',      icon: 'B',  minQty: 0.01,  qtyPrecision: 2, pricePrecision: 2 },
-  XRPUSDT:  { name: 'XRP',      icon: 'X',  minQty: 1,     qtyPrecision: 0, pricePrecision: 4 },
+  ADAUSDT:  { name: 'Cardano',  icon: '₳',  minQty: 1,     qtyPrecision: 0, pricePrecision: 5 },
+  DOTUSDT:  { name: 'Polkadot', icon: '●',  minQty: 0.1,   qtyPrecision: 1, pricePrecision: 3 },
+}
+
+const FALLBACK_SYMBOL_INFO = { name: 'Desconocido', icon: '?', minQty: 0, qtyPrecision: 2, pricePrecision: 2 }
+
+export function getSymbolInfo(symbol: string) {
+  return (SYMBOL_INFO as Record<string, typeof SYMBOL_INFO[TradingSymbol]>)[symbol] ?? FALLBACK_SYMBOL_INFO
 }

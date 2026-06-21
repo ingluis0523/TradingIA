@@ -14,7 +14,7 @@ const INTERVALS = ['5m', '15m', '1h', '4h', '1d']
 export function TradingChart({ className }: TradingChartProps) {
   const chartRef = useRef<HTMLDivElement>(null)
   const [symbol, setSymbol] = useState<TradingSymbol>('BTCUSDT')
-  const [interval, setInterval] = useState('1h')
+  const [interval, setInterval] = useState('4h')
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
@@ -54,14 +54,14 @@ export function TradingChart({ className }: TradingChartProps) {
       wickDownColor: '#ef4444',
     })
 
-    const ema20Series = chart.addLineSeries({
+    const ema10Series = chart.addLineSeries({
       color: '#3b82f6',
       lineWidth: 1,
       priceLineVisible: false,
       lastValueVisible: false,
     })
 
-    const ema50Series = chart.addLineSeries({
+    const ema55Series = chart.addLineSeries({
       color: '#f59e0b',
       lineWidth: 1,
       priceLineVisible: false,
@@ -103,8 +103,8 @@ export function TradingChart({ className }: TradingChartProps) {
           return result
         }
 
-        ema20Series.setData(calcEma(20))
-        ema50Series.setData(calcEma(50))
+        ema10Series.setData(calcEma(10))
+        ema55Series.setData(calcEma(55))
         chart.timeScale().fitContent()
       } catch (e) {
         console.error('Chart load error:', e)
@@ -170,10 +170,10 @@ export function TradingChart({ className }: TradingChartProps) {
 
       <div className="flex gap-4 text-xs text-muted-foreground">
         <span className="flex items-center gap-1.5">
-          <span className="w-4 h-0.5 bg-blue-500 inline-block" />EMA 20
+          <span className="w-4 h-0.5 bg-blue-500 inline-block" />EMA 10
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="w-4 h-0.5 bg-yellow-500 inline-block" />EMA 50
+          <span className="w-4 h-0.5 bg-yellow-500 inline-block" />EMA 55
         </span>
         <span className="ml-auto text-muted-foreground/60">Fuente: Binance Futures</span>
       </div>

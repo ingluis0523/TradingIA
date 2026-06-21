@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import type { BotConfig } from '@/types/trading'
-import { TRADING_SYMBOLS, SYMBOL_INFO } from '@/types/trading'
+import { TRADING_SYMBOLS, getSymbolInfo } from '@/types/trading'
 import { Save, AlertTriangle, Info, ExternalLink, ShieldCheck, Cpu } from 'lucide-react'
 
 export default function SettingsPage() {
@@ -103,7 +103,7 @@ export default function SettingsPage() {
             <p className="text-xs text-muted-foreground">Selecciona los pares que el bot monitorizará y en los que podrá operar.</p>
             <div className="flex flex-wrap gap-2">
               {TRADING_SYMBOLS.map((sym) => {
-                const info = SYMBOL_INFO[sym]
+                const info = getSymbolInfo(sym)
                 const active = (config.symbols || []).includes(sym)
                 return (
                   <button

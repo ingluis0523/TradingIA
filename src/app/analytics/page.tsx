@@ -5,7 +5,7 @@ import { PerformanceChart } from '@/components/dashboard/PerformanceChart'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatCurrency, formatPercent, cn } from '@/lib/utils'
 import type { Trade, PerformanceMetrics, BotConfig } from '@/types/trading'
-import { TRADING_SYMBOLS, SYMBOL_INFO } from '@/types/trading'
+import { TRADING_SYMBOLS, getSymbolInfo } from '@/types/trading'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
 
 export default function AnalyticsPage() {
@@ -202,7 +202,7 @@ export default function AnalyticsPage() {
                     'p-4 rounded-xl border text-center',
                     s.pnl >= 0 ? 'border-green-500/20 bg-green-500/5' : 'border-red-500/20 bg-red-500/5'
                   )}>
-                    <div className="text-2xl mb-1">{SYMBOL_INFO[`${s.symbol}USDT` as keyof typeof SYMBOL_INFO]?.icon}</div>
+                    <div className="text-2xl mb-1">{getSymbolInfo(`${s.symbol}USDT`).icon}</div>
                     <div className="text-sm font-semibold">{s.symbol}/USDT</div>
                     <div className={cn('text-base font-bold number-mono mt-1', s.pnl >= 0 ? 'text-green-400' : 'text-red-400')}>
                       {s.pnl >= 0 ? '+' : ''}{formatCurrency(s.pnl)}

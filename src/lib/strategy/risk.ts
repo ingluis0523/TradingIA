@@ -261,7 +261,7 @@ export function getTotalExposure(
 
 export function getSymbolQtyPrecision(symbol: TradingSymbol): number {
   const map: Record<TradingSymbol, number> = {
-    BTCUSDT: 3, ETHUSDT: 3, SOLUSDT: 1, BNBUSDT: 2, XRPUSDT: 0,
+    BTCUSDT: 3, BNBUSDT: 2, ADAUSDT: 0, DOTUSDT: 1,
   }
   return map[symbol]
 }

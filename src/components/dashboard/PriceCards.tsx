@@ -1,7 +1,7 @@
 'use client'
 import { cn } from '@/lib/utils'
 import type { Ticker } from '@/types/trading'
-import { SYMBOL_INFO, TRADING_SYMBOLS } from '@/types/trading'
+import { getSymbolInfo, TRADING_SYMBOLS } from '@/types/trading'
 import { TrendingUp, TrendingDown } from 'lucide-react'
 
 interface PriceCardsProps {
@@ -13,7 +13,7 @@ export function PriceCards({ tickers }: PriceCardsProps) {
     <div className="flex gap-2 overflow-x-auto pb-1 hide-scrollbar">
       {TRADING_SYMBOLS.map((symbol) => {
         const ticker = tickers.find((t) => t.symbol === symbol)
-        const info = SYMBOL_INFO[symbol]
+        const info = getSymbolInfo(symbol)
         const positive = (ticker?.changePct24h ?? 0) >= 0
 
         return (

@@ -29,7 +29,7 @@ function makeTrade(overrides: Partial<Trade> = {}): Trade {
 
 function makeSignal(overrides: Partial<Signal> = {}): Signal {
   return {
-    symbol: 'ETHUSDT',
+    symbol: 'BTCUSDT',
     type: 'LONG',
     strength: 75,
     price: 3000,
@@ -55,7 +55,7 @@ const baseAccount: AccountInfo = {
 
 const baseConfig: BotConfig = {
   isRunning: true,
-  symbols: ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'XRPUSDT'],
+  symbols: ['BTCUSDT', 'BNBUSDT', 'ADAUSDT', 'DOTUSDT'],
   leverage: 3,
   riskPerTrade: 0.02,
   maxPositions: 3,
@@ -63,7 +63,7 @@ const baseConfig: BotConfig = {
   initialCapital: 1000,
   currentCapital: 1000,
   marginType: 'ISOLATED',
-  strategy: 'AMSS',
+  strategy: 'MERINO',
   timeframe: '1h',
 }
 
@@ -139,7 +139,7 @@ describe('calculateDailyLoss', () => {
   it('includes negative unrealized PnL from open positions', () => {
     const snap = calculateDailyLoss([], [
       { symbol: 'BTCUSDT', unrealizedPnl: -40 },
-      { symbol: 'ETHUSDT', unrealizedPnl: -25 },
+      { symbol: 'BNBUSDT', unrealizedPnl: -25 },
     ])
     expect(snap.unrealizedLoss).toBe(65)
     expect(snap.totalLoss).toBe(65)
@@ -152,7 +152,7 @@ describe('calculateDailyLoss', () => {
 
   it('combines realized and unrealized losses', () => {
     const closed = makeTrade({ status: 'CLOSED', pnl: -30, closedAt: now })
-    const snap = calculateDailyLoss([closed], [{ symbol: 'ETHUSDT', unrealizedPnl: -20 }])
+    const snap = calculateDailyLoss([closed], [{ symbol: 'ADAUSDT', unrealizedPnl: -20 }])
     expect(snap.realizedLoss).toBe(30)
     expect(snap.unrealizedLoss).toBe(20)
     expect(snap.totalLoss).toBe(50)
@@ -165,7 +165,7 @@ describe('checkCanOpenPosition', () => {
   it('blocks when max concurrent positions reached', () => {
     const trades = [
       makeTrade({ id: '1', symbol: 'BTCUSDT' }),
-      makeTrade({ id: '2', symbol: 'ETHUSDT' }),
+      makeTrade({ id: '2', symbol: 'BNBUSDT' }),
       makeTrade({ id: '3', symbol: 'BNBUSDT' }),
     ]
     const result = checkCanOpenPosition(makeSignal(), trades, baseAccount, baseConfig, noLoss)
@@ -174,10 +174,10 @@ describe('checkCanOpenPosition', () => {
   })
 
   it('blocks when symbol already has an open position', () => {
-    const trades = [makeTrade({ symbol: 'ETHUSDT', status: 'OPEN' })]
-    const result = checkCanOpenPosition(makeSignal({ symbol: 'ETHUSDT' }), trades, baseAccount, baseConfig, noLoss)
+    const trades = [makeTrade({ symbol: 'ADAUSDT', status: 'OPEN' })]
+    const result = checkCanOpenPosition(makeSignal({ symbol: 'ADAUSDT' }), trades, baseAccount, baseConfig, noLoss)
     expect(result.allowed).toBe(false)
-    expect(result.reason).toMatch(/ETHUSDT/)
+    expect(result.reason).toMatch(/ADAUSDT/)
   })
 
   it('blocks when daily loss limit is hit (DailyLossSnapshot)', () => {

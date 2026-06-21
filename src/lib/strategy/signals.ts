@@ -1,33 +1,23 @@
-import type { Candle, Signal, TradingSymbol, Indicators } from '@/types/trading'
-import { calculateIndicators, calculateIndicatorsPrev } from './indicators'
-import { analyzeRegime, type RegimeAnalysis } from './regime'
-import { logSignalTrace } from './signal-trace'
+import type { Candle, Signal, TradingSymbol } from '@/types/trading'
+import { squeezeMomentum, aggregate4hToDaily, ema, atr, adx } from './indicators'
+import { addLogForUser } from '@/lib/supabase'
 
-// ─── Per-symbol 1h filters ────────────────────────────────────────────────────
-// 4h direction is now determined by analyzeRegime (DI+/DI- + EMA50 slope).
+const STRATEGY_SYMBOLS: TradingSymbol[] = ['BTCUSDT', 'BNBUSDT', 'ADAUSDT', 'DOTUSDT']
 
-interface SymbolFilters {
-  adxMin: number
-  volumeMultiplier: number
-}
-
-const FILTERS_BY_SYMBOL: Record<TradingSymbol, SymbolFilters> = {
-  BTCUSDT: { adxMin: 18, volumeMultiplier: 0.9 },
-  ETHUSDT: { adxMin: 20, volumeMultiplier: 1.0 },
-  SOLUSDT: { adxMin: 25, volumeMultiplier: 1.2 },
-  BNBUSDT: { adxMin: 20, volumeMultiplier: 1.0 },
-  XRPUSDT: { adxMin: 20, volumeMultiplier: 1.0 },
-}
-
-// ATR multiplier defaults — overridable per user via user_bot_config (migration 003)
-const DEFAULT_SL_ATR_MULT  = 2.2
-const DEFAULT_TP1_ATR_MULT = 2.0
-const DEFAULT_TP2_ATR_MULT = 3.5
+const EMA_FAST = 10
+const EMA_SLOW = 55
+const ADX_MIN = 20
+const ADX_SLOPE_PERIODS = 3
+const SQUEEZE_LOOKBACK = 4
+const SL_ATR_MULT = 2.5
+const TP1_ATR_MULT = 3.0
+const TP2_ATR_MULT = 6.0
+const EMA_MACRO_PERIOD = 200
 
 export interface SignalContext {
   symbol: TradingSymbol
-  candles1h: Candle[]
   candles4h: Candle[]
+  candles1h?: Candle[]  // kept optional for backward compat — engine still passes it
   currentPrice: number
   slAtrMult?: number
   tp1AtrMult?: number
@@ -36,238 +26,143 @@ export interface SignalContext {
   traceEnabled?: boolean
 }
 
-// ─── Signal Generation ────────────────────────────────────────────────────────
-// Strategy: Adaptive Multi-Signal — Regime (4h) → Momentum + Volume (1h)
-//
-// Long Entry:
-//   - 4H regime: TRENDING_UP (DI+ > DI-, EMA50 slope > 0.5%)
-//   - 1H MACD histogram positive AND growing
-//   - 1H RSI 40-68
-//   - 1H SuperTrend UP
-//   - 1H volume > volumeSMA20 × multiplier
-//   - 1H ADX > adxMin
-//
-// Short Entry:
-//   - 4H regime: TRENDING_DOWN (DI- > DI+, EMA50 slope < -0.5%)
-//   - 1H MACD histogram negative AND falling
-//   - 1H RSI 32-60
-//   - 1H SuperTrend DOWN
-//   - 1H volume > volumeSMA20 × multiplier
-//   - 1H ADX > adxMin
-
 export async function generateSignal(ctx: SignalContext): Promise<Signal | null> {
-  const { symbol, candles1h, candles4h, currentPrice, userId, traceEnabled = true } = ctx
+  const { symbol, candles4h, currentPrice, userId, traceEnabled = true } = ctx
   const shouldTrace = traceEnabled && userId !== undefined
 
-  // ── Trace point 1: insufficient data ─────────────────────────────────────
-  if (candles1h.length < 210 || candles4h.length < 210) {
+  if (!STRATEGY_SYMBOLS.includes(symbol)) return null
+
+  if (candles4h.length < 300) {
     if (shouldTrace) {
-      await logSignalTrace(userId!, {
-        symbol, price: currentPrice,
-        regime: { name: 'N/A', adx: 0, diPlus: 0, diMinus: 0, slope: 0, allowLong: false, allowShort: false },
-        outcome: 'BLOCKED_INSUFFICIENT_DATA',
+      await addLogForUser(userId!, {
+        level: 'DEBUG',
+        message: `[${symbol}] BLOCKED_INSUFFICIENT_DATA: ${candles4h.length} velas 4h (mín 300)`,
+        data: { symbol, candles4h: candles4h.length, outcome: 'BLOCKED_INSUFFICIENT_DATA' },
+        timestamp: new Date().toISOString(),
       })
     }
     return null
   }
 
-  // ── 4H Regime Filter ─────────────────────────────────────────────────────
-  // RANGING and TRANSITION block all entries — no bias, let regime settle.
-  const regime = analyzeRegime(candles4h, currentPrice)
+  const close = candles4h.map(c => c.close)
+  const last = candles4h.length - 1
 
-  // ── Trace point 2: blocked by regime ─────────────────────────────────────
-  if (regime.regime === 'RANGING' || regime.regime === 'TRANSITION') {
-    if (shouldTrace) {
-      await logSignalTrace(userId!, {
-        symbol, price: currentPrice,
-        regime: {
-          name: regime.regime, adx: regime.adx, diPlus: regime.diPlus, diMinus: regime.diMinus,
-          slope: regime.emaSlope4h, allowLong: regime.allowLong, allowShort: regime.allowShort,
-        },
-        outcome: 'BLOCKED_REGIME',
-      })
-    }
-    return null
-  }
+  const emaFast = ema(close, EMA_FAST)
+  const emaSlow = ema(close, EMA_SLOW)
+  const { val: sqzVal, sqzOn, sqzOff } = squeezeMomentum(candles4h)
+  const adxArr = adx(candles4h, 14)
+  const atrArr = atr(candles4h, 14)
 
-  const ind1h = calculateIndicators(candles1h)
-  const ind1hPrev = calculateIndicatorsPrev(candles1h)
+  const daily = aggregate4hToDaily(candles4h)
+  const emaMacroDaily = ema(daily.map(c => c.close), EMA_MACRO_PERIOD)
+  const macroEma = emaMacroDaily[emaMacroDaily.length - 1]
 
-  const atr = ind1h.atr14
-  if (!atr || atr === 0) return null
+  const atrVal = atrArr[last]
+  if (!atrVal || atrVal === 0) return null
+  if ([emaFast[last], emaSlow[last], sqzVal[last], adxArr[last], macroEma].some(v => isNaN(v))) return null
+  if (last < ADX_SLOPE_PERIODS || isNaN(adxArr[last - ADX_SLOPE_PERIODS])) return null
 
-  const filters = FILTERS_BY_SYMBOL[symbol]
+  const longBias = emaFast[last] > emaSlow[last]
+  const recentSqueeze = sqzOn.slice(Math.max(0, last - SQUEEZE_LOOKBACK), last).some(Boolean)
+  const squeezeReleased = sqzOff[last] && recentSqueeze
+  const momentumUp = sqzVal[last] > 0 && sqzVal[last] > sqzVal[last - 1]
+  const adxStrong = adxArr[last] > ADX_MIN && adxArr[last] > adxArr[last - ADX_SLOPE_PERIODS]
+  const macroOk = currentPrice > macroEma
 
-  // ── 1H MACD Momentum ──────────────────────────────────────────────────────
-  const macdBullish = ind1h.macdHistogram > 0 && ind1h.macdHistogram > ind1hPrev.macdHistogram
-  const macdBearish = ind1h.macdHistogram < 0 && ind1h.macdHistogram < ind1hPrev.macdHistogram
+  const isLong = longBias && squeezeReleased && momentumUp && adxStrong && macroOk
 
-  // ── 1H RSI Filter ─────────────────────────────────────────────────────────
-  const rsiLong  = ind1h.rsi14 >= 40 && ind1h.rsi14 <= 68
-  const rsiShort = ind1h.rsi14 >= 32 && ind1h.rsi14 <= 60
-
-  // ── SuperTrend ─────────────────────────────────────────────────────────────
-  const stBullish = ind1h.superTrendDirection === 'UP'
-  const stBearish = ind1h.superTrendDirection === 'DOWN'
-
-  // ── Volume Confirmation ────────────────────────────────────────────────────
-  const lastVol = candles1h[candles1h.length - 1].volume
-  const volumeConfirmed = lastVol >= ind1h.volumeSMA20 * filters.volumeMultiplier
-
-  // ── Trend Strength (1H) ────────────────────────────────────────────────────
-  const trendStrong1h = ind1h.adx14 > filters.adxMin
-
-  // ── Build Signal ──────────────────────────────────────────────────────────
-  const isLong  = regime.allowLong  && macdBullish && rsiLong  && stBullish && volumeConfirmed && trendStrong1h
-  const isShort = regime.allowShort && macdBearish && rsiShort && stBearish && volumeConfirmed && trendStrong1h
-
-  const filters1h = {
-    macdBullish, macdBearish,
-    macdHist: ind1h.macdHistogram, macdHistPrev: ind1hPrev.macdHistogram,
-    rsiLong, rsiShort, rsi14: ind1h.rsi14,
-    stBullish, stBearish, stDirection: ind1h.superTrendDirection as 'UP' | 'DOWN',
-    volumeConfirmed, volumeRatio: lastVol / ind1h.volumeSMA20,
-    trendStrong1h, adx1h: ind1h.adx14, adxMin: filters.adxMin,
-  }
-
-  // ── Trace point 3: blocked by 1h filters ─────────────────────────────────
-  if (!isLong && !isShort) {
+  if (!isLong) {
     if (shouldTrace) {
       const blocking: string[] = []
-      if (regime.allowLong) {
-        if (!macdBullish)     blocking.push(`MACD no alcista (hist=${ind1h.macdHistogram.toFixed(4)}, prev=${ind1hPrev.macdHistogram.toFixed(4)})`)
-        if (!rsiLong)         blocking.push(`RSI fuera de 40-68 (${ind1h.rsi14.toFixed(1)})`)
-        if (!stBullish)       blocking.push(`SuperTrend no UP (${ind1h.superTrendDirection})`)
-        if (!volumeConfirmed) blocking.push(`Volumen bajo (ratio ${(lastVol / ind1h.volumeSMA20).toFixed(2)} < ${filters.volumeMultiplier})`)
-        if (!trendStrong1h)   blocking.push(`ADX 1h débil (${ind1h.adx14.toFixed(1)} < ${filters.adxMin})`)
-      } else if (regime.allowShort) {
-        if (!macdBearish)     blocking.push(`MACD no bajista (hist=${ind1h.macdHistogram.toFixed(4)}, prev=${ind1hPrev.macdHistogram.toFixed(4)})`)
-        if (!rsiShort)        blocking.push(`RSI fuera de 32-60 (${ind1h.rsi14.toFixed(1)})`)
-        if (!stBearish)       blocking.push(`SuperTrend no DOWN (${ind1h.superTrendDirection})`)
-        if (!volumeConfirmed) blocking.push(`Volumen bajo (ratio ${(lastVol / ind1h.volumeSMA20).toFixed(2)} < ${filters.volumeMultiplier})`)
-        if (!trendStrong1h)   blocking.push(`ADX 1h débil (${ind1h.adx14.toFixed(1)} < ${filters.adxMin})`)
-      }
-      await logSignalTrace(userId!, {
-        symbol, price: currentPrice,
-        regime: {
-          name: regime.regime, adx: regime.adx, diPlus: regime.diPlus, diMinus: regime.diMinus,
-          slope: regime.emaSlope4h, allowLong: regime.allowLong, allowShort: regime.allowShort,
-        },
-        filters1h, outcome: 'BLOCKED_1H_FILTERS', blockingFilters: blocking,
+      if (!longBias)         blocking.push(`EMA10<EMA55 (sin sesgo alcista)`)
+      if (!squeezeReleased)  blocking.push(`sin squeeze release`)
+      if (!momentumUp)       blocking.push(`momentum no alcista (${sqzVal[last].toFixed(4)})`)
+      if (!adxStrong)        blocking.push(`ADX débil/plano (${adxArr[last].toFixed(1)})`)
+      if (!macroOk)          blocking.push(`bajo EMA200 diaria (${currentPrice.toFixed(2)} < ${macroEma.toFixed(2)})`)
+      await addLogForUser(userId!, {
+        level: 'DEBUG',
+        message: `[${symbol}] NO_SIGNAL: ${blocking.join(' | ')}`,
+        data: { symbol, price: currentPrice, outcome: 'BLOCKED', blockingFilters: blocking },
+        timestamp: new Date().toISOString(),
       })
     }
     return null
   }
 
-  const direction = isLong ? 1 : -1
+  const slMult  = ctx.slAtrMult  ?? SL_ATR_MULT
+  const tp1Mult = ctx.tp1AtrMult ?? TP1_ATR_MULT
+  const tp2Mult = ctx.tp2AtrMult ?? TP2_ATR_MULT
 
-  const slMult  = ctx.slAtrMult  ?? DEFAULT_SL_ATR_MULT
-  const tp1Mult = ctx.tp1AtrMult ?? DEFAULT_TP1_ATR_MULT
-  const tp2Mult = ctx.tp2AtrMult ?? DEFAULT_TP2_ATR_MULT
+  const stopLoss    = currentPrice - atrVal * slMult
+  const takeProfit1 = currentPrice + atrVal * tp1Mult
+  const takeProfit2 = currentPrice + atrVal * tp2Mult
 
-  const stopLoss    = currentPrice - direction * atr * slMult
-  const takeProfit1 = currentPrice + direction * atr * tp1Mult
-  const takeProfit2 = currentPrice + direction * atr * tp2Mult
+  const strength = calculateSignalStrength(adxArr[last], sqzVal[last])
+  const reason = `MERINO LONG | EMA10>EMA55 | squeeze release | mom ${sqzVal[last].toFixed(4)} | ADX ${adxArr[last].toFixed(1)} | precio>EMA200d`
 
-  const strength = calculateSignalStrength(ind1h, regime, isLong, volumeConfirmed, currentPrice)
-  const reason   = `${regime.reason} || 1H: ${buildReason(ind1h, isLong, atr, currentPrice)}`
-
-  // ── Trace point 4: signal generated ──────────────────────────────────────
   if (shouldTrace) {
-    await logSignalTrace(userId!, {
-      symbol, price: currentPrice,
-      regime: {
-        name: regime.regime, adx: regime.adx, diPlus: regime.diPlus, diMinus: regime.diMinus,
-        slope: regime.emaSlope4h, allowLong: regime.allowLong, allowShort: regime.allowShort,
-      },
-      filters1h,
-      outcome: isLong ? 'SIGNAL_LONG' : 'SIGNAL_SHORT',
-      signalStrength: strength,
+    await addLogForUser(userId!, {
+      level: 'DEBUG',
+      message: `[${symbol}] SIGNAL_LONG @ ${currentPrice} | ${reason}`,
+      data: { symbol, price: currentPrice, outcome: 'SIGNAL_LONG', strength, stopLoss, takeProfit1, takeProfit2 },
+      timestamp: new Date().toISOString(),
     })
   }
 
   return {
     symbol,
-    type: isLong ? 'LONG' : 'SHORT',
+    type: 'LONG',
     strength,
     price: currentPrice,
     stopLoss,
     takeProfit1,
     takeProfit2,
-    indicators: ind1h,
+    indicators: {
+      ema20: emaFast[last],
+      ema50: emaSlow[last],
+      ema200: macroEma,
+      rsi14: 0,
+      macdLine: 0,
+      macdSignal: 0,
+      macdHistogram: sqzVal[last],
+      atr14: atrVal,
+      bbUpper: 0,
+      bbMiddle: 0,
+      bbLower: 0,
+      superTrend: 0,
+      superTrendDirection: 'UP',
+      volumeSMA20: 0,
+      adx14: adxArr[last],
+      diPlus14: 0,
+      diMinus14: 0,
+    },
     reason,
     timestamp: Date.now(),
     executed: false,
   }
 }
 
-function calculateSignalStrength(
-  ind1h: Indicators,
-  regime: RegimeAnalysis,
-  isLong: boolean,
-  volumeConfirmed: boolean,
-  currentPrice: number,
-): number {
+function calculateSignalStrength(adxVal: number, sqzMom: number): number {
   let score = 50
-
-  // RSI position quality
-  if (isLong  && ind1h.rsi14 >= 45 && ind1h.rsi14 <= 60) score += 10
-  if (!isLong && ind1h.rsi14 >= 40 && ind1h.rsi14 <= 55) score += 10
-
-  // MACD histogram strength
-  const histStrength = Math.abs(ind1h.macdHistogram)
-  if (histStrength > 0) score += Math.min(10, histStrength * 2)
-
-  // Regime ADX bonus
-  if (regime.adx > 28) score += 10
-  else if (regime.adx > 22) score += 5
-
-  // DI spread bonus
-  const diSpread = Math.abs(regime.diPlus - regime.diMinus)
-  if (diSpread > 15) score += 5
-
-  // Volume confirmation
-  if (volumeConfirmed) score += 5
-
-  // BB position — CORRECTED: currentPrice vs bbMiddle, NOT macdLine
-  const bbRange = ind1h.bbUpper - ind1h.bbMiddle
-  const bbPosition = bbRange > 0 ? (currentPrice - ind1h.bbMiddle) / bbRange : 0
-  if (isLong  && bbPosition < 0.5)  score += 5  // price below upper half → room to run
-  if (!isLong && bbPosition > -0.5) score += 5  // price not yet near lower band → room to fall
-
+  if (adxVal > 30) score += 20
+  else if (adxVal > 25) score += 10
+  if (sqzMom > 0) score += Math.min(20, sqzMom * 100)
   return Math.min(100, Math.max(0, Math.round(score)))
 }
 
-function buildReason(ind1h: Indicators, isLong: boolean, atr: number, price: number): string {
-  const parts: string[] = []
-  parts.push(`${isLong ? 'LONG' : 'SHORT'}`)
-  parts.push(`RSI14: ${ind1h.rsi14.toFixed(1)}`)
-  parts.push(`MACD hist: ${ind1h.macdHistogram.toFixed(4)}`)
-  parts.push(`ATR: ${atr.toFixed(4)}`)
-  parts.push(`ADX: ${ind1h.adx14.toFixed(1)}`)
-  parts.push(`ST: ${ind1h.superTrendDirection}`)
-  parts.push(`price: ${price.toFixed(2)}`)
-  return parts.join(' | ')
+export function shouldCloseOnMomentumFlip(candles4h: Candle[], tp1Hit: boolean): boolean {
+  if (!tp1Hit || candles4h.length < 30) return false
+  const { val } = squeezeMomentum(candles4h)
+  const last = val.length - 1
+  return val[last] < 0 && val[last] < val[last - 1]
 }
 
-// ─── Close Signal ─────────────────────────────────────────────────────────────
-
+// stub — engine calls this signature; will be removed in section 3.4 engine update
 export function shouldCloseEarly(
-  side: 'BUY' | 'SELL',
-  candles1h: Candle[],
-  currentPrice: number,
-  entryPrice: number,
+  _side: 'BUY' | 'SELL',
+  _candles1h: Candle[],
+  _currentPrice: number,
+  _entryPrice: number,
 ): boolean {
-  if (candles1h.length < 210) return false
-  const ind = calculateIndicators(candles1h)
-
-  // RSI extreme overbought/oversold
-  if (side === 'BUY'  && ind.rsi14 > 80) return true
-  if (side === 'SELL' && ind.rsi14 < 20) return true
-
-  // SuperTrend reversal
-  if (side === 'BUY'  && ind.superTrendDirection === 'DOWN') return true
-  if (side === 'SELL' && ind.superTrendDirection === 'UP')   return true
-
   return false
 }

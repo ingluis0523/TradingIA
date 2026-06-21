@@ -2,7 +2,7 @@
 import { Badge } from '@/components/ui/badge'
 import { formatCurrency, formatPercent, cn, timeAgo } from '@/lib/utils'
 import type { Trade, Ticker } from '@/types/trading'
-import { SYMBOL_INFO } from '@/types/trading'
+import { getSymbolInfo } from '@/types/trading'
 import { TrendingUp, TrendingDown, Target, ShieldCheck } from 'lucide-react'
 
 interface ActiveTradesProps {
@@ -28,7 +28,7 @@ export function ActiveTrades({ trades, tickers }: ActiveTradesProps) {
       {trades.map((trade) => {
         const ticker = tickers.find((t) => t.symbol === trade.symbol)
         const currentPrice = ticker?.price ?? trade.entryPrice
-        const info = SYMBOL_INFO[trade.symbol]
+        const info = getSymbolInfo(trade.symbol)
         const direction = trade.side === 'BUY' ? 1 : -1
         const priceDiff = currentPrice - trade.entryPrice
         const unrealizedPnl = priceDiff * direction * trade.quantity

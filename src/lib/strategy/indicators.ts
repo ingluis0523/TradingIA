@@ -232,6 +232,118 @@ export function adx(candles: Candle[], period = 14): number[] {
   return adxFull(candles, period).adx
 }
 
+// ─── Squeeze Momentum (LazyBear) ─────────────────────────────────────────────
+// Reference: https://www.tradingview.com/script/nqQ1DT5a-Squeeze-Momentum-Indicator-LazyBear/
+// BB(20,2.0) vs KC(20, TR-based, 1.5), momentum via linreg of delta-source.
+
+export interface SqueezeResult {
+  val: number[]      // momentum histogram (linreg of delta-to-midrange)
+  sqzOn: boolean[]   // true = BB inside KC (compression)
+  sqzOff: boolean[]  // true = BB outside KC (release)
+}
+
+function stdev(values: number[], period: number): number[] {
+  return values.map((_, i) => {
+    if (i < period - 1) return NaN
+    const slice = values.slice(i - period + 1, i + 1)
+    const mean = slice.reduce((s, v) => s + v, 0) / period
+    const variance = slice.reduce((s, v) => s + (v - mean) ** 2, 0) / period
+    return Math.sqrt(variance)
+  })
+}
+
+function linreg(values: number[], period: number): number[] {
+  const out = new Array(values.length).fill(NaN)
+  const x = Array.from({ length: period }, (_, i) => i)
+  const xMean = x.reduce((s, v) => s + v, 0) / period
+  const denom = x.reduce((s, v) => s + (v - xMean) ** 2, 0)
+  for (let i = period - 1; i < values.length; i++) {
+    const w = values.slice(i - period + 1, i + 1)
+    if (w.some(isNaN)) continue
+    const yMean = w.reduce((s, v) => s + v, 0) / period
+    const slope = x.reduce((s, xi, j) => s + (xi - xMean) * (w[j] - yMean), 0) / denom
+    const intercept = yMean - slope * xMean
+    out[i] = intercept + slope * (period - 1) // value of regression line at last point
+  }
+  return out
+}
+
+export function squeezeMomentum(
+  candles: Candle[],
+  bbLen = 20, bbMult = 2.0, kcLen = 20, kcMult = 1.5,
+): SqueezeResult {
+  const close = candles.map(c => c.close)
+  const high  = candles.map(c => c.high)
+  const low   = candles.map(c => c.low)
+  const n = candles.length
+
+  // BB
+  const basis  = sma(close, bbLen)
+  const dev    = stdev(close, bbLen)
+  const upperBB = basis.map((b, i) => b + bbMult * dev[i])
+  const lowerBB = basis.map((b, i) => b - bbMult * dev[i])
+
+  // KC — uses true-range SMA (not ATR Wilder) to match LazyBear
+  const ma = sma(close, kcLen)
+  const tr = candles.map((c, i) => {
+    if (i === 0) return c.high - c.low
+    const pc = candles[i - 1].close
+    return Math.max(c.high - c.low, Math.abs(c.high - pc), Math.abs(c.low - pc))
+  })
+  const rangeMA = sma(tr, kcLen)
+  const upperKC = ma.map((m, i) => m + rangeMA[i] * kcMult)
+  const lowerKC = ma.map((m, i) => m - rangeMA[i] * kcMult)
+
+  const sqzOn:  boolean[] = new Array(n).fill(false)
+  const sqzOff: boolean[] = new Array(n).fill(false)
+  for (let i = 0; i < n; i++) {
+    if (isNaN(lowerBB[i]) || isNaN(lowerKC[i])) continue
+    sqzOn[i]  = lowerBB[i] > lowerKC[i] && upperBB[i] < upperKC[i]
+    sqzOff[i] = lowerBB[i] < lowerKC[i] && upperBB[i] > upperKC[i]
+  }
+
+  // Momentum source: close − avg(avg(highest_high, lowest_low), sma(close))
+  const hh: number[] = new Array(n).fill(NaN)
+  const ll: number[] = new Array(n).fill(NaN)
+  for (let i = kcLen - 1; i < n; i++) {
+    hh[i] = Math.max(...high.slice(i - kcLen + 1, i + 1))
+    ll[i] = Math.min(...low.slice(i - kcLen + 1, i + 1))
+  }
+  const smaClose = sma(close, kcLen)
+  const source = close.map((c, i) => c - (((hh[i] + ll[i]) / 2) + smaClose[i]) / 2)
+
+  const val = linreg(source, kcLen)
+
+  return { val, sqzOn, sqzOff }
+}
+
+// ─── 4h → Daily aggregation ───────────────────────────────────────────────────
+// Used to compute EMA200 daily for the Merino macro filter.
+// Assumes candles are sorted ascending by openTime.
+
+export function aggregate4hToDaily(candles4h: Candle[]): Candle[] {
+  const byDay = new Map<number, Candle[]>()
+  for (const c of candles4h) {
+    const dayKey = Math.floor(c.openTime / 86_400_000) * 86_400_000
+    if (!byDay.has(dayKey)) byDay.set(dayKey, [])
+    byDay.get(dayKey)!.push(c)
+  }
+  const daily: Candle[] = []
+  const entries = Array.from(byDay.entries()).sort((a, b) => a[0] - b[0])
+  for (const [dayKey, group] of entries) {
+    daily.push({
+      openTime:  dayKey,
+      open:      group[0].open,
+      high:      Math.max(...group.map(c => c.high)),
+      low:       Math.min(...group.map(c => c.low)),
+      close:     group[group.length - 1].close,
+      volume:    group.reduce((s, c) => s + c.volume, 0),
+      closeTime: group[group.length - 1].closeTime,
+    })
+  }
+  return daily
+}
+
 // ─── Volume MA ────────────────────────────────────────────────────────────────
 
 export function volumeMA(candles: Candle[], period = 20): number[] {

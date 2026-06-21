@@ -13,7 +13,7 @@ import {
   roundPrice,
   roundQty,
 } from './binance'
-import { generateSignal, shouldCloseEarly } from './strategy/signals'
+import { generateSignal, shouldCloseOnMomentumFlip } from './strategy/signals'
 import {
   calculatePositionSize,
   checkCanOpenPosition,
@@ -40,7 +40,7 @@ import {
 } from './supabase'
 import { getCurrentMode } from './trading-mode'
 import type { BotConfig, Signal, Trade, TradingSymbol, UserBotConfig } from '@/types/trading'
-import { TRADING_SYMBOLS, SYMBOL_INFO } from '@/types/trading'
+import { TRADING_SYMBOLS, getSymbolInfo } from '@/types/trading'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -304,7 +304,7 @@ async function handleOrphanPosition(
   client: typeof defaultClient,
 ): Promise<void> {
   const symbol = bPos.symbol as TradingSymbol
-  const symbolInfo = SYMBOL_INFO[symbol]
+  const symbolInfo = getSymbolInfo(symbol)
   const side = bPos.positionAmt > 0 ? 'BUY' : 'SELL'
   const slSide = side === 'BUY' ? 'SELL' : 'BUY'
   const direction = side === 'BUY' ? 1 : -1
@@ -468,25 +468,23 @@ async function processSymbolForUser(
   client: typeof defaultClient,
   cbState: CircuitBreakerState,
 ): Promise<void> {
-  const [candles1h, candles4h] = await Promise.all([
-    client.getKlines(symbol, '1h', 250),
-    client.getKlines(symbol, '4h', 250),
-  ])
+  // Merino strategy uses 4h exclusively; 1300 candles ≈ 217 days → covers EMA200 daily warmup
+  const candles4h = await client.getKlines(symbol, '4h', 1300)
 
-  const currentPrice = candles1h[candles1h.length - 1].close
+  const currentPrice = candles4h[candles4h.length - 1].close
 
   const existingTrade = openTrades.find((t) => t.symbol === symbol && t.status === 'OPEN')
   if (existingTrade) {
     const closed = shadowMode
-      ? await manageShadowPosition(existingTrade, currentPrice, candles1h, userId)
-      : await manageOpenPosition(existingTrade, currentPrice, candles1h, config, account.positions, userId, client)
+      ? await manageShadowPosition(existingTrade, currentPrice, candles4h, userId)
+      : await manageOpenPosition(existingTrade, currentPrice, candles4h, config, account.positions, userId, client)
     if (closed) result.tradesClosed++
     return
   }
 
   const traceEnabled = process.env.SIGNAL_TRACE_ENABLED !== 'false'
   const signal = await generateSignal({
-    symbol, candles1h, candles4h, currentPrice,
+    symbol, candles4h, currentPrice,
     slAtrMult: config.slAtrMult,
     tp1AtrMult: config.tp1AtrMult,
     tp2AtrMult: config.tp2AtrMult,
@@ -539,7 +537,7 @@ async function openPositionForUser(
   client: typeof defaultClient,
   sizeMultiplier = 1.0,
 ): Promise<void> {
-  const symbolInfo = SYMBOL_INFO[symbol]
+  const symbolInfo = getSymbolInfo(symbol)
   const side = signal.type === 'LONG' ? 'BUY' : 'SELL'
   const slSide = side === 'BUY' ? 'SELL' : 'BUY'
   const leverage = config.leverage
@@ -742,13 +740,13 @@ async function openPositionForUser(
 async function manageOpenPosition(
   trade: Trade,
   currentPrice: number,
-  candles1h: Awaited<ReturnType<typeof defaultClient.getKlines>>,
+  candles4h: Awaited<ReturnType<typeof defaultClient.getKlines>>,
   config: BotConfig,
   positions: Awaited<ReturnType<typeof defaultClient.getAccountInfo>>['positions'],
   userId: string,
   client: typeof defaultClient,
 ): Promise<boolean> {
-  const symbolInfo = SYMBOL_INFO[trade.symbol]
+  const symbolInfo = getSymbolInfo(trade.symbol)
   const direction = trade.side === 'BUY' ? 1 : -1
   const slSide = trade.side === 'BUY' ? 'SELL' : 'BUY'
 
@@ -795,8 +793,8 @@ async function manageOpenPosition(
   }
 
   // ── Trailing stop after TP1 ───────────────────────────────────────────────
-  if (trade.tp1Hit && candles1h.length >= 210) {
-    const ind = calculateIndicators(candles1h)
+  if (trade.tp1Hit && candles4h.length >= 50) {
+    const ind = calculateIndicators(candles4h)
     const newSl = calculateTrailingStop(trade, currentPrice, ind.atr14)
 
     if (newSl !== null) {
@@ -820,13 +818,10 @@ async function manageOpenPosition(
     }
   }
 
-  // ── Early exit check ──────────────────────────────────────────────────────
-  if (candles1h.length >= 210) {
-    const closeEarly = shouldCloseEarly(trade.side, candles1h, currentPrice, trade.entryPrice)
-    if (closeEarly) {
-      await closePositionEarly(trade, currentPrice, userId, 'Señal de cierre anticipado (reversión de tendencia)', client)
-      return true
-    }
+  // ── Momentum flip exit (Merino: close after TP1 if momentum turns negative) ─
+  if (shouldCloseOnMomentumFlip(candles4h, trade.tp1Hit ?? false)) {
+    await closePositionEarly(trade, currentPrice, userId, 'Cierre por momentum flip (MOM_FLIP)', client)
+    return true
   }
 
   return false
@@ -915,10 +910,10 @@ async function closePositionEarly(
 async function manageShadowPosition(
   trade: Trade,
   currentPrice: number,
-  candles1h: Awaited<ReturnType<typeof defaultClient.getKlines>>,
+  candles4h: Awaited<ReturnType<typeof defaultClient.getKlines>>,
   userId: string,
 ): Promise<boolean> {
-  const symbolInfo = SYMBOL_INFO[trade.symbol]
+  const symbolInfo = getSymbolInfo(trade.symbol)
   const direction = trade.side === 'BUY' ? 1 : -1
 
   // 1. SL hit check
@@ -965,8 +960,8 @@ async function manageShadowPosition(
     }
 
     // 4. Trailing stop (only after TP1)
-    if (candles1h.length >= 210) {
-      const ind = calculateIndicators(candles1h)
+    if (candles4h.length >= 50) {
+      const ind = calculateIndicators(candles4h)
       const newSl = calculateTrailingStop(trade, currentPrice, ind.atr14)
       if (newSl !== null) {
         const roundedSl = roundPrice(newSl, symbolInfo.pricePrecision)
@@ -978,12 +973,10 @@ async function manageShadowPosition(
     }
   }
 
-  // 5. Early exit check
-  if (candles1h.length >= 210) {
-    if (shouldCloseEarly(trade.side, candles1h, currentPrice, trade.entryPrice)) {
-      await closeShadowPosition(userId, trade, currentPrice, 'Cierre anticipado simulado (reversión)')
-      return true
-    }
+  // 5. Momentum flip exit (Merino: close after TP1 if momentum turns negative)
+  if (shouldCloseOnMomentumFlip(candles4h, trade.tp1Hit ?? false)) {
+    await closeShadowPosition(userId, trade, currentPrice, 'Cierre por momentum flip simulado (MOM_FLIP)')
+    return true
   }
 
   return false

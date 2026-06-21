@@ -12,8 +12,8 @@ export async function POST() {
     const maxPositions = config?.maxPositions || Number(process.env.BOT_MAX_POSITIONS || 3)
     const maxDailyLoss = config?.maxDailyLoss || Number(process.env.BOT_MAX_DAILY_LOSS || 0.05)
     const initialCapital = config?.initialCapital || Number(process.env.BOT_INITIAL_CAPITAL || 1000)
-    const strategy = config?.strategy || 'AMSS'
-    const timeframe = config?.timeframe || '1h'
+    const strategy = config?.strategy || 'MERINO'
+    const timeframe = config?.timeframe || '4h'
 
     // Update dashboard-facing config
     await updateBotConfig({

@@ -28,7 +28,7 @@ interface DashboardData {
 
 const INITIAL_CONFIG: BotConfig = {
   isRunning: false,
-  symbols: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'],
+  symbols: ['BTCUSDT', 'BNBUSDT', 'ADAUSDT', 'DOTUSDT'],
   leverage: 3,
   riskPerTrade: 0.02,
   maxPositions: 3,
@@ -36,8 +36,8 @@ const INITIAL_CONFIG: BotConfig = {
   initialCapital: 1000,
   currentCapital: 1000,
   marginType: 'ISOLATED',
-  strategy: 'AMSS',
-  timeframe: '1h',
+  strategy: 'MERINO',
+  timeframe: '4h',
 }
 
 export default function Dashboard() {
