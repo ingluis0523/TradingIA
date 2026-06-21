@@ -10,6 +10,7 @@ interface SignalFeedProps {
 }
 
 const LOG_ICONS = {
+  DEBUG: Info,
   INFO: Info,
   WARN: AlertTriangle,
   ERROR: AlertCircle,
@@ -18,6 +19,7 @@ const LOG_ICONS = {
 }
 
 const LOG_CLASSES = {
+  DEBUG: 'text-muted-foreground',
   INFO: 'text-blue-400',
   WARN: 'text-yellow-400',
   ERROR: 'text-red-400',

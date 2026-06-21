@@ -1,6 +1,7 @@
 import type { Candle, Signal, TradingSymbol, Indicators } from '@/types/trading'
 import { calculateIndicators, calculateIndicatorsPrev } from './indicators'
 import { analyzeRegime, type RegimeAnalysis } from './regime'
+import { logSignalTrace } from './signal-trace'
 
 // ─── Per-symbol 1h filters ────────────────────────────────────────────────────
 // 4h direction is now determined by analyzeRegime (DI+/DI- + EMA50 slope).
@@ -31,6 +32,8 @@ export interface SignalContext {
   slAtrMult?: number
   tp1AtrMult?: number
   tp2AtrMult?: number
+  userId?: string
+  traceEnabled?: boolean
 }
 
 // ─── Signal Generation ────────────────────────────────────────────────────────
@@ -53,14 +56,39 @@ export interface SignalContext {
 //   - 1H ADX > adxMin
 
 export async function generateSignal(ctx: SignalContext): Promise<Signal | null> {
-  const { symbol, candles1h, candles4h, currentPrice } = ctx
+  const { symbol, candles1h, candles4h, currentPrice, userId, traceEnabled = true } = ctx
+  const shouldTrace = traceEnabled && userId !== undefined
 
-  if (candles1h.length < 210 || candles4h.length < 210) return null
+  // ── Trace point 1: insufficient data ─────────────────────────────────────
+  if (candles1h.length < 210 || candles4h.length < 210) {
+    if (shouldTrace) {
+      await logSignalTrace(userId!, {
+        symbol, price: currentPrice,
+        regime: { name: 'N/A', adx: 0, diPlus: 0, diMinus: 0, slope: 0, allowLong: false, allowShort: false },
+        outcome: 'BLOCKED_INSUFFICIENT_DATA',
+      })
+    }
+    return null
+  }
 
   // ── 4H Regime Filter ─────────────────────────────────────────────────────
   // RANGING and TRANSITION block all entries — no bias, let regime settle.
   const regime = analyzeRegime(candles4h, currentPrice)
-  if (regime.regime === 'RANGING' || regime.regime === 'TRANSITION') return null
+
+  // ── Trace point 2: blocked by regime ─────────────────────────────────────
+  if (regime.regime === 'RANGING' || regime.regime === 'TRANSITION') {
+    if (shouldTrace) {
+      await logSignalTrace(userId!, {
+        symbol, price: currentPrice,
+        regime: {
+          name: regime.regime, adx: regime.adx, diPlus: regime.diPlus, diMinus: regime.diMinus,
+          slope: regime.emaSlope4h, allowLong: regime.allowLong, allowShort: regime.allowShort,
+        },
+        outcome: 'BLOCKED_REGIME',
+      })
+    }
+    return null
+  }
 
   const ind1h = calculateIndicators(candles1h)
   const ind1hPrev = calculateIndicatorsPrev(candles1h)
@@ -93,7 +121,43 @@ export async function generateSignal(ctx: SignalContext): Promise<Signal | null>
   const isLong  = regime.allowLong  && macdBullish && rsiLong  && stBullish && volumeConfirmed && trendStrong1h
   const isShort = regime.allowShort && macdBearish && rsiShort && stBearish && volumeConfirmed && trendStrong1h
 
-  if (!isLong && !isShort) return null
+  const filters1h = {
+    macdBullish, macdBearish,
+    macdHist: ind1h.macdHistogram, macdHistPrev: ind1hPrev.macdHistogram,
+    rsiLong, rsiShort, rsi14: ind1h.rsi14,
+    stBullish, stBearish, stDirection: ind1h.superTrendDirection as 'UP' | 'DOWN',
+    volumeConfirmed, volumeRatio: lastVol / ind1h.volumeSMA20,
+    trendStrong1h, adx1h: ind1h.adx14, adxMin: filters.adxMin,
+  }
+
+  // ── Trace point 3: blocked by 1h filters ─────────────────────────────────
+  if (!isLong && !isShort) {
+    if (shouldTrace) {
+      const blocking: string[] = []
+      if (regime.allowLong) {
+        if (!macdBullish)     blocking.push(`MACD no alcista (hist=${ind1h.macdHistogram.toFixed(4)}, prev=${ind1hPrev.macdHistogram.toFixed(4)})`)
+        if (!rsiLong)         blocking.push(`RSI fuera de 40-68 (${ind1h.rsi14.toFixed(1)})`)
+        if (!stBullish)       blocking.push(`SuperTrend no UP (${ind1h.superTrendDirection})`)
+        if (!volumeConfirmed) blocking.push(`Volumen bajo (ratio ${(lastVol / ind1h.volumeSMA20).toFixed(2)} < ${filters.volumeMultiplier})`)
+        if (!trendStrong1h)   blocking.push(`ADX 1h débil (${ind1h.adx14.toFixed(1)} < ${filters.adxMin})`)
+      } else if (regime.allowShort) {
+        if (!macdBearish)     blocking.push(`MACD no bajista (hist=${ind1h.macdHistogram.toFixed(4)}, prev=${ind1hPrev.macdHistogram.toFixed(4)})`)
+        if (!rsiShort)        blocking.push(`RSI fuera de 32-60 (${ind1h.rsi14.toFixed(1)})`)
+        if (!stBearish)       blocking.push(`SuperTrend no DOWN (${ind1h.superTrendDirection})`)
+        if (!volumeConfirmed) blocking.push(`Volumen bajo (ratio ${(lastVol / ind1h.volumeSMA20).toFixed(2)} < ${filters.volumeMultiplier})`)
+        if (!trendStrong1h)   blocking.push(`ADX 1h débil (${ind1h.adx14.toFixed(1)} < ${filters.adxMin})`)
+      }
+      await logSignalTrace(userId!, {
+        symbol, price: currentPrice,
+        regime: {
+          name: regime.regime, adx: regime.adx, diPlus: regime.diPlus, diMinus: regime.diMinus,
+          slope: regime.emaSlope4h, allowLong: regime.allowLong, allowShort: regime.allowShort,
+        },
+        filters1h, outcome: 'BLOCKED_1H_FILTERS', blockingFilters: blocking,
+      })
+    }
+    return null
+  }
 
   const direction = isLong ? 1 : -1
 
@@ -101,12 +165,26 @@ export async function generateSignal(ctx: SignalContext): Promise<Signal | null>
   const tp1Mult = ctx.tp1AtrMult ?? DEFAULT_TP1_ATR_MULT
   const tp2Mult = ctx.tp2AtrMult ?? DEFAULT_TP2_ATR_MULT
 
-  const stopLoss   = currentPrice - direction * atr * slMult
+  const stopLoss    = currentPrice - direction * atr * slMult
   const takeProfit1 = currentPrice + direction * atr * tp1Mult
   const takeProfit2 = currentPrice + direction * atr * tp2Mult
 
   const strength = calculateSignalStrength(ind1h, regime, isLong, volumeConfirmed, currentPrice)
   const reason   = `${regime.reason} || 1H: ${buildReason(ind1h, isLong, atr, currentPrice)}`
+
+  // ── Trace point 4: signal generated ──────────────────────────────────────
+  if (shouldTrace) {
+    await logSignalTrace(userId!, {
+      symbol, price: currentPrice,
+      regime: {
+        name: regime.regime, adx: regime.adx, diPlus: regime.diPlus, diMinus: regime.diMinus,
+        slope: regime.emaSlope4h, allowLong: regime.allowLong, allowShort: regime.allowShort,
+      },
+      filters1h,
+      outcome: isLong ? 'SIGNAL_LONG' : 'SIGNAL_SHORT',
+      signalStrength: strength,
+    })
+  }
 
   return {
     symbol,

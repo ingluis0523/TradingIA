@@ -160,7 +160,7 @@ export interface PerformanceMetrics {
 
 export interface BotLog {
   id?: string
-  level: 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS' | 'TRADE'
+  level: 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS' | 'TRADE'
   message: string
   data?: Record<string, unknown>
   timestamp: string

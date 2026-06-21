@@ -484,11 +484,14 @@ async function processSymbolForUser(
     return
   }
 
+  const traceEnabled = process.env.SIGNAL_TRACE_ENABLED !== 'false'
   const signal = await generateSignal({
     symbol, candles1h, candles4h, currentPrice,
     slAtrMult: config.slAtrMult,
     tp1AtrMult: config.tp1AtrMult,
     tp2AtrMult: config.tp2AtrMult,
+    userId,
+    traceEnabled,
   })
   if (!signal) return
 
